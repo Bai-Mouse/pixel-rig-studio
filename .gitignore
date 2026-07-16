@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.npm-cache/
+.tools/
+nekoha-pet/
+src-tauri/target/
+*.log
+.DS_Store

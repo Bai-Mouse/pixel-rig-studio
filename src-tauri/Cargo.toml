@@ -1,0 +1,17 @@
+[package]
+name = "pixel-rig-studio"
+version = "1.0.0"
+description = "Modular pixel art animation studio"
+authors = ["Pixel Rig Studio"]
+edition = "2021"
+
+[lib]
+name = "pixel_rig_studio_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
