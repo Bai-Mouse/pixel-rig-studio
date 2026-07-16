@@ -1,14 +1,22 @@
 import { useState } from 'react';
 import { Icon } from './Icon';
+import type { RecentProject } from '../project/recentProjects';
 
 interface ProjectStartScreenProps {
   onCreateEmpty: () => void;
   onCreateCharacter: () => void;
   onImport: () => void;
+  recentProjects: RecentProject[];
+  onOpenRecent: (recent: RecentProject) => void;
   onReturnToEditor?: () => void;
 }
 
-export function ProjectStartScreen({ onCreateEmpty, onCreateCharacter, onImport, onReturnToEditor }: ProjectStartScreenProps) {
+function recentDate(savedAt: string) {
+  const date = new Date(savedAt);
+  return Number.isNaN(date.getTime()) ? 'Saved project' : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+}
+
+export function ProjectStartScreen({ onCreateEmpty, onCreateCharacter, onImport, recentProjects, onOpenRecent, onReturnToEditor }: ProjectStartScreenProps) {
   const [step, setStep] = useState<'start' | 'new'>('start');
 
   return (
@@ -22,6 +30,20 @@ export function ProjectStartScreen({ onCreateEmpty, onCreateCharacter, onImport,
               <button type="button" className="project-start-option primary" onClick={() => setStep('new')}><Icon name="plus" size={22} /><span><strong>New project</strong><small>Start with a blank canvas or a character rig.</small></span><Icon name="chevron" size={16} /></button>
               <button type="button" className="project-start-option" onClick={onImport}><Icon name="import" size={22} /><span><strong>Import project</strong><small>Open a saved Pixel Rig Studio project file.</small></span><Icon name="chevron" size={16} /></button>
             </div>
+            {recentProjects.length > 0 && (
+              <div className="recent-project-section">
+                <div className="recent-project-heading"><strong>Recent projects</strong><span>{recentProjects.length}</span></div>
+                <div className="recent-project-list">
+                  {recentProjects.map((recent) => (
+                    <button key={recent.id} type="button" className="recent-project-card" onClick={() => onOpenRecent(recent)}>
+                      <span className="recent-project-icon"><Icon name="layers" size={17} /></span>
+                      <span><strong>{recent.name}</strong><small>{recentDate(recent.savedAt)}</small></span>
+                      <Icon name="chevron" size={14} />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </>
         ) : (
           <>

@@ -1,4 +1,6 @@
 import type { AnimationFrame, NodeFrameState, NodeId, ProjectSettings, RigNode, SpriteAsset } from '../types/project';
+import { DEFAULT_PIXEL_ALPHA_THRESHOLD, snapToGrid } from '../canvas/pixelRotation';
+import { spriteRasterCache } from '../canvas/spriteRasterCache';
 
 export interface RenderableProject {
   assets: Record<string, SpriteAsset>;
@@ -8,6 +10,17 @@ export interface RenderableProject {
   frames: AnimationFrame[];
 }
 
+interface Matrix {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e: number;
+  f: number;
+}
+
+const identityMatrix: Matrix = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+
 function stateFor(node: RigNode, frame: AnimationFrame): NodeFrameState {
   return frame.nodeStates[node.id] ?? {
     position: node.transform.position,
@@ -15,6 +28,31 @@ function stateFor(node: RigNode, frame: AnimationFrame): NodeFrameState {
     scale: node.transform.scale,
     visible: node.visible,
     imageIndex: 0,
+  };
+}
+
+function matrixForState(state: NodeFrameState): Matrix {
+  const radians = state.rotation * Math.PI / 180;
+  const cosine = Math.cos(radians);
+  const sine = Math.sin(radians);
+  return {
+    a: cosine * state.scale.x,
+    b: sine * state.scale.x,
+    c: -sine * state.scale.y,
+    d: cosine * state.scale.y,
+    e: state.position.x,
+    f: state.position.y,
+  };
+}
+
+function multiplyMatrices(parent: Matrix, child: Matrix): Matrix {
+  return {
+    a: parent.a * child.a + parent.c * child.b,
+    b: parent.b * child.a + parent.d * child.b,
+    c: parent.a * child.c + parent.c * child.d,
+    d: parent.b * child.c + parent.d * child.d,
+    e: parent.a * child.e + parent.c * child.f + parent.e,
+    f: parent.b * child.e + parent.d * child.f + parent.f,
   };
 }
 
@@ -32,10 +70,9 @@ async function loadAssets(assets: Record<string, SpriteAsset>) {
   return new Map(entries);
 }
 
-export async function renderAnimationFrame(project: RenderableProject, frameIndex: number): Promise<HTMLCanvasElement> {
+function renderFrameWithImages(project: RenderableProject, frameIndex: number, images: Map<string, HTMLImageElement>): HTMLCanvasElement {
   const frame = project.frames[frameIndex];
   if (!frame) throw new Error('The selected animation frame does not exist.');
-  const images = await loadAssets(project.assets);
   const canvas = document.createElement('canvas');
   canvas.width = project.settings.canvasSize.x;
   canvas.height = project.settings.canvasSize.y;
@@ -44,32 +81,61 @@ export async function renderAnimationFrame(project: RenderableProject, frameInde
   context.imageSmoothingEnabled = false;
   context.translate(canvas.width / 2, canvas.height / 2);
 
-  const drawNode = (node: RigNode) => {
+  const drawNode = (node: RigNode, parentMatrix: Matrix) => {
     const nodeState = stateFor(node, frame);
     if (!node.visible || !nodeState.visible) return;
-    context.save();
-    context.translate(Math.round(nodeState.position.x), Math.round(nodeState.position.y));
-    context.rotate(nodeState.rotation * Math.PI / 180);
-    context.scale(nodeState.scale.x, nodeState.scale.y);
+    const worldMatrix = multiplyMatrices(parentMatrix, matrixForState(nodeState));
     const asset = node.assetId ? project.assets[node.assetId] : null;
     const image = asset ? images.get(asset.id) : null;
-    if (asset && image) context.drawImage(image, -node.pivot.x, -node.pivot.y, asset.width, asset.height);
+    if (asset && image) {
+      const anchorX = snapToGrid(worldMatrix.e, project.settings.pixelGridSize);
+      const anchorY = snapToGrid(worldMatrix.f, project.settings.pixelGridSize);
+      if (project.settings.pixelPerfectRotation) {
+        const worldDeterminant = worldMatrix.a * worldMatrix.d - worldMatrix.b * worldMatrix.c;
+        const rasterized = spriteRasterCache.get(asset.id, image, {
+          angleRadians: Math.atan2(worldMatrix.b, worldMatrix.a),
+          scaleX: Math.hypot(worldMatrix.a, worldMatrix.b),
+          scaleY: Math.sign(worldDeterminant || 1) * Math.hypot(worldMatrix.c, worldMatrix.d),
+          pivotX: node.pivot.x,
+          pivotY: node.pivot.y,
+          pixelGridSize: project.settings.pixelGridSize,
+          alphaThreshold: DEFAULT_PIXEL_ALPHA_THRESHOLD,
+          fillSinglePixelGaps: true,
+          linearTransform: {
+            a: worldMatrix.a,
+            b: worldMatrix.b,
+            c: worldMatrix.c,
+            d: worldMatrix.d,
+          },
+        });
+        context.drawImage(rasterized.canvas, anchorX + rasterized.offsetX, anchorY + rasterized.offsetY);
+      } else {
+        context.save();
+        context.transform(worldMatrix.a, worldMatrix.b, worldMatrix.c, worldMatrix.d, anchorX, anchorY);
+        context.drawImage(image, -node.pivot.x, -node.pivot.y, asset.width, asset.height);
+        context.restore();
+      }
+    }
     node.children.forEach((childId) => {
       const child = project.nodes[childId];
-      if (child) drawNode(child);
+      if (child) drawNode(child, worldMatrix);
     });
-    context.restore();
   };
 
   project.rootNodeIds.forEach((id) => {
     const node = project.nodes[id];
-    if (node) drawNode(node);
+    if (node) drawNode(node, identityMatrix);
   });
   return canvas;
 }
 
+export async function renderAnimationFrame(project: RenderableProject, frameIndex: number): Promise<HTMLCanvasElement> {
+  return renderFrameWithImages(project, frameIndex, await loadAssets(project.assets));
+}
+
 export async function renderAllFrames(project: RenderableProject) {
-  return Promise.all(project.frames.map((_, index) => renderAnimationFrame(project, index)));
+  const images = await loadAssets(project.assets);
+  return project.frames.map((_, index) => renderFrameWithImages(project, index, images));
 }
 
 export async function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {

@@ -140,6 +140,9 @@ export function App() {
     try {
       const project = parseProjectFile(JSON.stringify(recent.project));
       loadProject(project, recent.name);
+      setRecentProjects(rememberProject(recent.project, recent.name));
+      setShowProjectStart(false);
+      setCanReturnToEditor(false);
     } catch {
       window.alert('This recent project can no longer be loaded.');
     }
@@ -176,7 +179,7 @@ export function App() {
     <>
       <input ref={projectInputRef} type="file" accept="application/json,.json,.pixelrig.json" hidden onChange={(event) => { void openProjectFile(event.target.files); event.currentTarget.value = ''; }} />
       {showProjectStart ? (
-        <ProjectStartScreen onCreateEmpty={startEmptyProject} onCreateCharacter={startCharacterTemplate} onImport={() => projectInputRef.current?.click()} onReturnToEditor={canReturnToEditor ? () => setShowProjectStart(false) : undefined} />
+        <ProjectStartScreen recentProjects={recentProjects} onOpenRecent={openRecent} onCreateEmpty={startEmptyProject} onCreateCharacter={startCharacterTemplate} onImport={() => projectInputRef.current?.click()} onReturnToEditor={canReturnToEditor ? () => setShowProjectStart(false) : undefined} />
       ) : (
         <div className="app-shell" style={workspaceStyle}>
           <Toolbar onNewProject={() => { setCanReturnToEditor(true); setShowProjectStart(true); }} onOpenProject={() => projectInputRef.current?.click()} onSaveProject={saveProject} onOpenRecent={openRecent} onExport={() => setShowExport(true)} projectName={projectName} recentProjects={recentProjects} showGrid={showGrid} onToggleGrid={() => setShowGrid((value) => !value)} />

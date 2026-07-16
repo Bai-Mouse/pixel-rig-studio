@@ -1,6 +1,7 @@
 import { create } from 'zustand';
-import type { AnimationFrame, AnimationTemplate, AssetId, NodeFrameState, NodeId, ProjectSettings, RigNode, SpriteAsset, TransformTool, Vec2 } from '../types/project';
+import type { AnimationFrame, AnimationTemplate, AssetId, NodeFrameState, NodeId, ProjectSettings, RigNode, RotationSnapAngle, SpriteAsset, TransformTool, Vec2 } from '../types/project';
 import type { AnimationDataFile, SerializableProject } from '../export/projectSerializer';
+import { normalizeProjectSettings } from '../export/projectSerializer';
 import { createDemoProject } from './sampleProject';
 
 type FrameStatePatch = Omit<Partial<NodeFrameState>, 'position' | 'scale'> & {
@@ -52,7 +53,6 @@ interface ProjectState {
   activeTool: TransformTool;
   showPivot: boolean;
   snapEnabled: boolean;
-  pixelPerfectEnabled: boolean;
   transformSession: TransformSession | null;
   transformHistory: HistoryEntry[];
   redoStack: HistoryEntry[];
@@ -87,7 +87,9 @@ interface ProjectState {
   setActiveTool: (tool: TransformTool) => void;
   toggleShowPivot: () => void;
   toggleSnap: () => void;
-  togglePixelPerfect: () => void;
+  togglePixelPerfectRotation: () => void;
+  setPixelGridSize: (size: number) => void;
+  setRotationSnapAngle: (angle: RotationSnapAngle) => void;
   beginTransform: (nodeId: NodeId) => void;
   updateNodeFrame: (nodeId: NodeId, patch: FrameStatePatch) => void;
   commitTransform: () => void;
@@ -277,7 +279,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   activeTool: 'move',
   showPivot: false,
   snapEnabled: false,
-  pixelPerfectEnabled: true,
   transformSession: null,
   transformHistory: [],
   redoStack: [],
@@ -508,7 +509,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   setActiveTool: (activeTool) => set({ activeTool }),
   toggleShowPivot: () => set((state) => ({ showPivot: !state.showPivot })),
   toggleSnap: () => set((state) => ({ snapEnabled: !state.snapEnabled })),
-  togglePixelPerfect: () => set((state) => ({ pixelPerfectEnabled: !state.pixelPerfectEnabled })),
+  togglePixelPerfectRotation: () => set((state) => ({
+    settings: { ...state.settings, pixelPerfectRotation: !state.settings.pixelPerfectRotation },
+  })),
+  setPixelGridSize: (size) => set((state) => ({
+    settings: { ...state.settings, pixelGridSize: Math.max(1, Math.min(16, Math.round(size || 1))) },
+  })),
+  setRotationSnapAngle: (rotationSnapAngle) => set((state) => ({
+    settings: { ...state.settings, rotationSnapAngle },
+  })),
   beginTransform: (nodeId) =>
     set((state) => {
       const node = state.nodes[nodeId];
@@ -529,7 +538,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const frame = state.frames[state.currentFrameIndex];
       if (!node || node.locked || !frame) return {};
       const current = frame.nodeStates[nodeId] ?? snapshotNode(node);
-      return { frames: withFrameNodeState(state.frames, state.currentFrameIndex, nodeId, mergeFrameState(current, patch)) };
+      const angleIncrement = state.settings.rotationSnapAngle;
+      const snappedPatch = patch.rotation !== undefined && angleIncrement > 0
+        ? { ...patch, rotation: Math.round(patch.rotation / angleIncrement) * angleIncrement }
+        : patch;
+      return { frames: withFrameNodeState(state.frames, state.currentFrameIndex, nodeId, mergeFrameState(current, snappedPatch)) };
     }),
   commitTransform: () =>
     set((state) => {
@@ -727,7 +740,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       nodes,
       rootNodeIds: [],
       folders: ['All sprites', 'Body', 'Head', 'Hair', 'Hands', 'Legs', 'Weapons', 'Effects'],
-      settings: { canvasSize: { x: 320, y: 240 }, gridSize: 8 },
+      settings: {
+        canvasSize: { x: 320, y: 240 },
+        gridSize: 8,
+        pixelPerfectRotation: true,
+        pixelGridSize: 1,
+        rotationSnapAngle: 0,
+      },
       projectName: 'Untitled project',
       frames: [createFrame(nodes)],
       currentFrameIndex: 0,
@@ -738,7 +757,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       activeTool: 'move',
       showPivot: false,
       snapEnabled: false,
-      pixelPerfectEnabled: true,
       transformSession: null,
       transformHistory: [],
       redoStack: [],
@@ -761,7 +779,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       activeTool: 'move',
       showPivot: false,
       snapEnabled: false,
-      pixelPerfectEnabled: true,
       transformSession: null,
       transformHistory: [],
       redoStack: [],
@@ -776,7 +793,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       nodes: project.nodes,
       rootNodeIds: project.rootNodeIds,
       folders: ['All sprites', ...Array.from(new Set(Object.values(project.assets).map((asset) => asset.folder))).filter(Boolean)],
-      settings: project.settings,
+      settings: normalizeProjectSettings(project.settings),
       frames: project.frames.length ? project.frames : [createFrame(project.nodes)],
       currentFrameIndex: 0,
       isPlaying: false,
@@ -787,7 +804,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       selectedAssetId: null,
       selectedAssetIds: [],
       activeTool: 'move',
-      pixelPerfectEnabled: true,
       transformSession: null,
       transformHistory: [],
       redoStack: [],

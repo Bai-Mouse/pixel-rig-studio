@@ -55,7 +55,12 @@ export interface RigNode {
 export interface ProjectSettings {
   canvasSize: Vec2;
   gridSize: number;
+  pixelPerfectRotation: boolean;
+  pixelGridSize: number;
+  rotationSnapAngle: RotationSnapAngle;
 }
+
+export type RotationSnapAngle = 0 | 1 | 5 | 15 | 45;
 
 /** The values that animation frames own for each reusable rig node. */
 export interface NodeFrameState {

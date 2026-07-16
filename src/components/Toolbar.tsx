@@ -1,6 +1,6 @@
 import { Icon } from './Icon';
 import { useProjectStore } from '../state/projectStore';
-import type { TransformTool } from '../types/project';
+import type { RotationSnapAngle, TransformTool } from '../types/project';
 import type { RecentProject } from '../project/recentProjects';
 
 interface ToolbarProps {
@@ -19,12 +19,16 @@ export function Toolbar({ onNewProject, onOpenProject, onSaveProject, onOpenRece
   const activeTool = useProjectStore((state) => state.activeTool);
   const showPivot = useProjectStore((state) => state.showPivot);
   const snapEnabled = useProjectStore((state) => state.snapEnabled);
-  const pixelPerfectEnabled = useProjectStore((state) => state.pixelPerfectEnabled);
+  const pixelPerfectRotation = useProjectStore((state) => state.settings.pixelPerfectRotation);
+  const pixelGridSize = useProjectStore((state) => state.settings.pixelGridSize);
+  const rotationSnapAngle = useProjectStore((state) => state.settings.rotationSnapAngle);
   const selectedNodeId = useProjectStore((state) => state.selectedNodeId);
   const setActiveTool = useProjectStore((state) => state.setActiveTool);
   const toggleShowPivot = useProjectStore((state) => state.toggleShowPivot);
   const toggleSnap = useProjectStore((state) => state.toggleSnap);
-  const togglePixelPerfect = useProjectStore((state) => state.togglePixelPerfect);
+  const togglePixelPerfectRotation = useProjectStore((state) => state.togglePixelPerfectRotation);
+  const setPixelGridSize = useProjectStore((state) => state.setPixelGridSize);
+  const setRotationSnapAngle = useProjectStore((state) => state.setRotationSnapAngle);
   const flipNode = useProjectStore((state) => state.flipNode);
   const resetNodeTransform = useProjectStore((state) => state.resetNodeTransform);
   const transformTools: { tool: TransformTool; label: string; icon: 'cursor' | 'move' | 'rotate' | 'scale' | 'target' }[] = [
@@ -50,7 +54,22 @@ export function Toolbar({ onNewProject, onOpenProject, onSaveProject, onOpenRece
       <div className="toolbar-divider" />
       <button className={`compact-tool ${showPivot ? 'active' : ''}`} type="button" title="Show selected pivot" aria-pressed={showPivot} onClick={toggleShowPivot}><Icon name="target" /></button>
       <button className={`compact-tool ${snapEnabled ? 'active' : ''}`} type="button" title="Snap to grid" aria-pressed={snapEnabled} onClick={toggleSnap}><Icon name="magnet" /></button>
-      <button className={`compact-tool ${pixelPerfectEnabled ? 'active' : ''}`} type="button" title="Pixel alignment: snap final rendering to whole pixels" aria-pressed={pixelPerfectEnabled} onClick={togglePixelPerfect}><Icon name="pixel" /></button>
+      <div className="render-controls" aria-label="Pixel rotation rendering">
+        <button className={`compact-tool pixel-rotation-toggle ${pixelPerfectRotation ? 'active' : ''}`} type="button" title={`Pixel-perfect rotation: ${pixelPerfectRotation ? 'On' : 'Off'}`} aria-label="Pixel-perfect rotation" aria-pressed={pixelPerfectRotation} onClick={togglePixelPerfectRotation}><Icon name="pixel" /><span>PP {pixelPerfectRotation ? 'On' : 'Off'}</span></button>
+        <select className="render-setting-select" aria-label="Snap rotation angle" title="Snap rotation angle" value={rotationSnapAngle} onChange={(event) => setRotationSnapAngle(Number(event.target.value) as RotationSnapAngle)}>
+          <option value={0}>Snap: Off</option>
+          <option value={1}>Snap: 1 deg</option>
+          <option value={5}>Snap: 5 deg</option>
+          <option value={15}>Snap: 15 deg</option>
+          <option value={45}>Snap: 45 deg</option>
+        </select>
+        <select className="render-setting-select pixel-grid-select" aria-label="Pixel grid size" title="Pixel grid size" value={pixelGridSize} onChange={(event) => setPixelGridSize(Number(event.target.value))}>
+          <option value={1}>Grid: 1px</option>
+          <option value={2}>Grid: 2px</option>
+          <option value={4}>Grid: 4px</option>
+          <option value={8}>Grid: 8px</option>
+        </select>
+      </div>
       <button className="compact-tool" type="button" title="Flip horizontally" disabled={!selectedNodeId} onClick={() => selectedNodeId && flipNode(selectedNodeId, 'horizontal')}><Icon name="flipHorizontal" /></button>
       <button className="compact-tool" type="button" title="Flip vertically" disabled={!selectedNodeId} onClick={() => selectedNodeId && flipNode(selectedNodeId, 'vertical')}><Icon name="flipVertical" /></button>
       <button className="compact-tool" type="button" title="Reset transform" disabled={!selectedNodeId} onClick={() => selectedNodeId && resetNodeTransform(selectedNodeId)}><Icon name="reset" /></button>

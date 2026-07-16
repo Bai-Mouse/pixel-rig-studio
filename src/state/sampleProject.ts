@@ -81,6 +81,12 @@ export function createDemoProject() {
     'right-leg': node('right-leg', 'Right Leg', 'body', 'leg', 9, 34),
   };
 
-  const settings: ProjectSettings = { canvasSize: { x: 320, y: 240 }, gridSize: 8 };
+  const settings: ProjectSettings = {
+    canvasSize: { x: 320, y: 240 },
+    gridSize: 8,
+    pixelPerfectRotation: true,
+    pixelGridSize: 1,
+    rotationSnapAngle: 0,
+  };
   return { assets, nodes, rootNodeIds: ['body'], folders: ['All sprites', 'Sprite Sheets', 'Body', 'Head', 'Hair', 'Hands', 'Legs', 'Weapons', 'Effects'], settings };
 }

@@ -133,9 +133,15 @@ export function PropertiesPanel({ onEditAsset }: PropertiesPanelProps) {
           </div>
           <div className="property-group">
             <h3>Sprite</h3>
-            <Pair label="Image" value={nodeAsset?.name ?? 'No image'} />
+            <label className="node-asset-select">Image
+              <select value={node.assetId ?? ''} onChange={(event) => { if (event.target.value) setNodeAsset(node.id, event.target.value); }}>
+                <option value="" disabled>No image selected</option>
+                {allAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.folder ? `${asset.folder} / ` : ''}{asset.name}</option>)}
+              </select>
+            </label>
+            {nodeAsset && <div className="node-texture-preview"><span className="checkerboard"><img src={nodeAsset.src} alt="" /></span><div><strong>{nodeAsset.name}</strong><small>{nodeAsset.folder || 'Unsorted'}</small></div></div>}
             <Pair label="Size" value={nodeAsset ? `${nodeAsset.width} x ${nodeAsset.height} px` : '—'} />
-            <p className="node-edit-hint">Choose an image in the left library, then use Apply to assign it to this node.</p>
+            <p className="node-edit-hint">Choose any imported image to assign it directly to this node.</p>
           </div>
           <div className="property-group">
             <h3>Pivot</h3>

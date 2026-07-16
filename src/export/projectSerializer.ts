@@ -1,5 +1,5 @@
 import type { RenderableProject } from './animationRenderer';
-import type { AnimationFrame, NodeFrameState } from '../types/project';
+import type { AnimationFrame, NodeFrameState, ProjectSettings, RotationSnapAngle } from '../types/project';
 
 export interface SerializableProject extends RenderableProject {
   fps: number;
@@ -67,7 +67,7 @@ export function parseProjectFile(source: string): SerializableProject {
   }
   if (typeof file.animation.fps !== 'number' || file.animation.fps < 1 || !Number.isFinite(file.animation.fps)) throw new Error('The project FPS is invalid.');
   return {
-    settings: file.settings,
+    settings: normalizeProjectSettings(file.settings),
     assets: file.assets,
     nodes: file.nodes,
     rootNodeIds: file.rootNodeIds,
@@ -75,6 +75,21 @@ export function parseProjectFile(source: string): SerializableProject {
     fps: Math.min(60, Math.round(file.animation.fps)),
     isLooping: Boolean(file.animation.loop),
   } as SerializableProject;
+}
+
+const rotationSnapAngles: RotationSnapAngle[] = [0, 1, 5, 15, 45];
+
+export function normalizeProjectSettings(settings: Pick<ProjectSettings, 'canvasSize' | 'gridSize'> & Partial<ProjectSettings>): ProjectSettings {
+  const rotationSnapAngle = rotationSnapAngles.includes(settings.rotationSnapAngle as RotationSnapAngle)
+    ? settings.rotationSnapAngle as RotationSnapAngle
+    : 0;
+  return {
+    canvasSize: settings.canvasSize,
+    gridSize: settings.gridSize,
+    pixelPerfectRotation: settings.pixelPerfectRotation ?? true,
+    pixelGridSize: Math.max(1, Math.min(16, Math.round(settings.pixelGridSize ?? 1))),
+    rotationSnapAngle,
+  };
 }
 
 export function animationDataFile(project: SerializableProject): AnimationDataFile {
