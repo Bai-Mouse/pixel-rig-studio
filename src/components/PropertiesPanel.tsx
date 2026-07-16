@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import '../source-preview.css';
 import { Icon } from './Icon';
 import { useProjectStore } from '../state/projectStore';
 import { filesToImportCandidates, replaceAssetsFromSource } from '../utils/importPng';
@@ -32,6 +33,11 @@ export function PropertiesPanel({ onEditAsset }: PropertiesPanelProps) {
   const allAssets = useMemo(() => Object.values(assetsById), [assetsById]);
   const selectedAsset = selectedAssetId ? assetsById[selectedAssetId] : null;
   const selectedAssets = selectedAssetIds.map((assetId) => assetsById[assetId]).filter((asset): asset is SpriteAsset => Boolean(asset));
+  const isWholeSourceSheet = Boolean(selectedAsset?.source && selectedAsset.slice
+    && selectedAsset.slice.x === 0
+    && selectedAsset.slice.y === 0
+    && selectedAsset.slice.width === selectedAsset.source.width
+    && selectedAsset.slice.height === selectedAsset.source.height);
   const nodeAsset = node?.assetId ? assetsById[node.assetId] : null;
   const [draftName, setDraftName] = useState('');
   const [assetMessage, setAssetMessage] = useState('');
@@ -96,13 +102,22 @@ export function PropertiesPanel({ onEditAsset }: PropertiesPanelProps) {
             <Pair label="Dimensions" value={`${selectedAsset.width} x ${selectedAsset.height} px`} />
             <Pair label="Format" value="PNG" />
             {selectedAsset.source && <Pair label="Source image" value={selectedAsset.source.name} />}
+            {isWholeSourceSheet && <p className="node-edit-hint">This is the master sprite sheet. Editing it refreshes every linked body part.</p>}
             {selectedAsset.slice && <Pair label="Source region" value={`${selectedAsset.slice.x}, ${selectedAsset.slice.y} · ${selectedAsset.slice.width} x ${selectedAsset.slice.height}`} />}
           </div>
+          {selectedAsset.source && <div className="property-group">
+            <h3>Source PNG preview</h3>
+            <div className="source-image-stage" style={{ aspectRatio: `${selectedAsset.source.width} / ${selectedAsset.source.height}` }}>
+              <img src={selectedAsset.source.src} alt={`${selectedAsset.source.name} source preview`} />
+              {selectedAsset.slice && <span className="source-slice-outline" style={{ left: `${selectedAsset.slice.x / selectedAsset.source.width * 100}%`, top: `${selectedAsset.slice.y / selectedAsset.source.height * 100}%`, width: `${selectedAsset.slice.width / selectedAsset.source.width * 100}%`, height: `${selectedAsset.slice.height / selectedAsset.source.height * 100}%` }} />}
+            </div>
+            <p className="source-image-caption">The highlighted box is this sprite's linked source region.</p>
+          </div>}
           <div className="property-group asset-management-actions">
             <h3>Actions</h3>
             <button className="add-sprite-button" type="button" onClick={() => createNodeForAsset(selectedAsset.id)}><Icon name="plus" /> Add to canvas</button>
             {node && <button className="apply-sprite-button" type="button" onClick={() => setNodeAsset(node.id, selectedAsset.id)}>Apply to “{node.name}”</button>}
-            <button className="edit-sprite-button" type="button" onClick={() => onEditAsset(selectedAsset.id)}>Edit pixels</button>
+            <button className="edit-sprite-button" type="button" onClick={() => onEditAsset(selectedAsset.id)}>{isWholeSourceSheet ? 'Edit sprite sheet' : 'Edit pixels'}</button>
             {selectedAsset.source && <button className="replace-source-button" type="button" disabled={isReplacing} onClick={() => replacementInputRef.current?.click()}><Icon name="import" size={13} /> {isReplacing ? 'Replacing source...' : 'Replace source PNG'}</button>}
             {selectedAsset.source && <p className={assetMessage.startsWith('Updated') ? 'asset-message success' : 'asset-message'}>{assetMessage || 'Keeps the same saved slices and node assignments.'}</p>}
             <button className="delete-sprite-button" type="button" onClick={() => { if (window.confirm(`Delete ${selectedAsset.name}? Nodes using it will keep an empty sprite slot.`)) deleteAsset(selectedAsset.id); }}><Icon name="trash" size={13} /> Delete sprite</button>

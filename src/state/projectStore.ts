@@ -52,6 +52,7 @@ interface ProjectState {
   activeTool: TransformTool;
   showPivot: boolean;
   snapEnabled: boolean;
+  pixelPerfectEnabled: boolean;
   transformSession: TransformSession | null;
   transformHistory: HistoryEntry[];
   redoStack: HistoryEntry[];
@@ -86,6 +87,7 @@ interface ProjectState {
   setActiveTool: (tool: TransformTool) => void;
   toggleShowPivot: () => void;
   toggleSnap: () => void;
+  togglePixelPerfect: () => void;
   beginTransform: (nodeId: NodeId) => void;
   updateNodeFrame: (nodeId: NodeId, patch: FrameStatePatch) => void;
   commitTransform: () => void;
@@ -275,6 +277,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   activeTool: 'move',
   showPivot: false,
   snapEnabled: false,
+  pixelPerfectEnabled: true,
   transformSession: null,
   transformHistory: [],
   redoStack: [],
@@ -505,6 +508,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   setActiveTool: (activeTool) => set({ activeTool }),
   toggleShowPivot: () => set((state) => ({ showPivot: !state.showPivot })),
   toggleSnap: () => set((state) => ({ snapEnabled: !state.snapEnabled })),
+  togglePixelPerfect: () => set((state) => ({ pixelPerfectEnabled: !state.pixelPerfectEnabled })),
   beginTransform: (nodeId) =>
     set((state) => {
       const node = state.nodes[nodeId];
@@ -734,6 +738,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       activeTool: 'move',
       showPivot: false,
       snapEnabled: false,
+      pixelPerfectEnabled: true,
       transformSession: null,
       transformHistory: [],
       redoStack: [],
@@ -756,6 +761,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       activeTool: 'move',
       showPivot: false,
       snapEnabled: false,
+      pixelPerfectEnabled: true,
       transformSession: null,
       transformHistory: [],
       redoStack: [],
@@ -781,6 +787,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       selectedAssetId: null,
       selectedAssetIds: [],
       activeTool: 'move',
+      pixelPerfectEnabled: true,
       transformSession: null,
       transformHistory: [],
       redoStack: [],

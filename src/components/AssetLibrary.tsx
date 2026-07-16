@@ -2,7 +2,8 @@ import { useMemo, useRef, useState, type MouseEvent } from 'react';
 import { Icon } from './Icon';
 import { SpriteSheetImportDialog } from './SpriteSheetImportDialog';
 import { useProjectStore } from '../state/projectStore';
-import { createAssetsFromCandidate, createAssetsFromDetectedParts, filesToImportCandidates, type SpriteImportCandidate } from '../utils/importPng';
+import { createAssetsFromCandidate, createAssetsFromSlices, filesToImportCandidates, type SpriteImportCandidate } from '../utils/importPng';
+import type { SpriteSlice } from '../types/project';
 
 export function AssetLibrary() {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -59,15 +60,13 @@ export function AssetLibrary() {
     }
   };
 
-  const confirmSpriteImport = async (mode: 'single' | 'automatic' | 'grid', tileWidth: number, tileHeight: number) => {
+  const confirmSpriteImport = async (slices: SpriteSlice[] | null) => {
     const candidate = importQueue[0];
     if (!candidate) return;
     setError(null);
     setIsImporting(true);
     try {
-      addAssets(mode === 'automatic'
-        ? await createAssetsFromDetectedParts(candidate)
-        : await createAssetsFromCandidate(candidate, tileWidth, tileHeight));
+      addAssets(slices ? await createAssetsFromSlices(candidate, slices) : await createAssetsFromCandidate(candidate));
       setImportQueue((queue) => queue.slice(1));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Sprite slicing failed.');
@@ -118,7 +117,7 @@ export function AssetLibrary() {
           </button>
         ))}
       </div>
-      {importQueue[0] && <SpriteSheetImportDialog candidate={importQueue[0]} queueLength={importQueue.length} isImporting={isImporting} onImport={(mode, tileWidth, tileHeight) => void confirmSpriteImport(mode, tileWidth, tileHeight)} onCancel={() => setImportQueue([])} />}
+      {importQueue[0] && <SpriteSheetImportDialog candidate={importQueue[0]} queueLength={importQueue.length} isImporting={isImporting} onImport={(slices) => void confirmSpriteImport(slices)} onCancel={() => setImportQueue([])} />}
     </section>
   );
 }

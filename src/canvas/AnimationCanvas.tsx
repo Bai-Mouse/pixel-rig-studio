@@ -151,6 +151,7 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
   const activeTool = useProjectStore((state) => state.activeTool);
   const showPivot = useProjectStore((state) => state.showPivot);
   const snapEnabled = useProjectStore((state) => state.snapEnabled);
+  const pixelPerfectEnabled = useProjectStore((state) => state.pixelPerfectEnabled);
   const selectNode = useProjectStore((state) => state.selectNode);
   const setActiveTool = useProjectStore((state) => state.setActiveTool);
   const beginTransform = useProjectStore((state) => state.beginTransform);
@@ -194,13 +195,19 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
     context.lineWidth = 1 / zoom;
     context.strokeRect(-settings.canvasSize.x / 2, -settings.canvasSize.y / 2, settings.canvasSize.x, settings.canvasSize.y);
 
-    const drawNode = (node: RigNode, frame: AnimationFrame, showSelection: boolean) => {
+    const drawNode = (node: RigNode, frame: AnimationFrame, showSelection: boolean, matrixCache: Map<string, Matrix>) => {
       const nodeState = frameStateFor(node, frame);
       if (!node.visible || !nodeState.visible) return;
+      const worldMatrix = getWorldMatrix(nodes, frame, node.id, matrixCache);
       context.save();
-      context.translate(Math.round(nodeState.position.x), Math.round(nodeState.position.y));
-      context.rotate(nodeState.rotation * Math.PI / 180);
-      context.scale(nodeState.scale.x, nodeState.scale.y);
+      context.transform(
+        worldMatrix.a,
+        worldMatrix.b,
+        worldMatrix.c,
+        worldMatrix.d,
+        pixelPerfectEnabled ? Math.round(worldMatrix.e) : worldMatrix.e,
+        pixelPerfectEnabled ? Math.round(worldMatrix.f) : worldMatrix.f,
+      );
       const asset: SpriteAsset | undefined = node.assetId ? assets[node.assetId] : undefined;
       if (asset) {
         const image = getImage(asset.src, render);
@@ -237,19 +244,20 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
           }
         }
       }
+      context.restore();
       node.children.forEach((id) => {
         const child = nodes[id];
-        if (child) drawNode(child, frame, showSelection);
+        if (child) drawNode(child, frame, showSelection, matrixCache);
       });
-      context.restore();
     };
     const drawFrame = (frame: AnimationFrame | undefined, opacity: number, showSelection: boolean) => {
       if (!frame) return;
       context.save();
       context.globalAlpha = opacity;
+      const matrixCache = new Map<string, Matrix>();
       roots.forEach((id) => {
         const node = nodes[id];
-        if (node) drawNode(node, frame, showSelection);
+        if (node) drawNode(node, frame, showSelection, matrixCache);
       });
       context.restore();
     };
@@ -259,7 +267,7 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
     }
     drawFrame(frames[currentFrameIndex], 1, true);
     context.restore();
-  }, [activeTool, assets, currentFrameIndex, frames, nodes, onionSkinEnabled, pan.x, pan.y, roots, selectedNodeId, settings.canvasSize.x, settings.canvasSize.y, settings.gridSize, showGrid, showPivot, zoom]);
+  }, [activeTool, assets, currentFrameIndex, frames, nodes, onionSkinEnabled, pan.x, pan.y, pixelPerfectEnabled, roots, selectedNodeId, settings.canvasSize.x, settings.canvasSize.y, settings.gridSize, showGrid, showPivot, zoom]);
 
   useEffect(() => {
     render();

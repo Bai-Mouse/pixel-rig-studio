@@ -1,4 +1,4 @@
-type IconName = 'import' | 'plus' | 'eye' | 'eyeOff' | 'lock' | 'unlock' | 'chevron' | 'grid' | 'target' | 'zoomIn' | 'zoomOut' | 'layers' | 'cursor' | 'image' | 'play' | 'pause' | 'loop' | 'onion' | 'copy' | 'trash' | 'keyframe' | 'move' | 'rotate' | 'scale' | 'flipHorizontal' | 'flipVertical' | 'reset' | 'magnet' | 'download';
+type IconName = 'import' | 'plus' | 'eye' | 'eyeOff' | 'lock' | 'unlock' | 'chevron' | 'grid' | 'target' | 'zoomIn' | 'zoomOut' | 'layers' | 'cursor' | 'image' | 'play' | 'pause' | 'loop' | 'onion' | 'copy' | 'trash' | 'keyframe' | 'move' | 'rotate' | 'scale' | 'flipHorizontal' | 'flipVertical' | 'reset' | 'magnet' | 'pixel' | 'download';
 
 const paths: Record<IconName, string> = {
   import: 'M12 3v12m0 0 4-4m-4 4-4-4M5 21h14',
@@ -29,6 +29,7 @@ const paths: Record<IconName, string> = {
   flipVertical: 'M3 12h18M7 4l5 5 5-5M7 20l5-5 5 5',
   reset: 'M19 8V3m0 0h-5m5 0-3.6 3.6A8 8 0 1 0 20 14',
   magnet: 'M6 3v8a6 6 0 0 0 12 0V3M6 3h4v7a2 2 0 0 0 4 0V3h4M6 3H4m16 0h-2',
+  pixel: 'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z',
   download: 'M12 3v12m0 0 4-4m-4 4-4-4M5 20h14',
 };
 

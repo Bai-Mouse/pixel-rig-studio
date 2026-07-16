@@ -1,0 +1,4 @@
+.source-image-stage { position: relative; overflow: hidden; border: 1px solid #3e465d; border-radius: 5px; background-color: #282d38; background-image: linear-gradient(45deg, #20242d 25%, transparent 25%), linear-gradient(-45deg, #20242d 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #20242d 75%), linear-gradient(-45deg, transparent 75%, #20242d 75%); background-size: 10px 10px; background-position: 0 0, 0 5px, 5px -5px, -5px 0; }
+.source-image-stage > img { width: 100%; height: 100%; display: block; image-rendering: pixelated; }
+.source-slice-outline { position: absolute; box-sizing: border-box; border: 2px solid #ffc578; background: rgba(255, 197, 120, .12); pointer-events: none; }
+.source-image-caption { margin: 7px 0 0; color: #77819b; font-size: 9px; line-height: 1.4; }

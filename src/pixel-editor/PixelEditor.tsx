@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { useProjectStore } from '../state/projectStore';
+import { replaceAssetsFromSource } from '../utils/importPng';
 import {
   clonePixelDocument,
   colorAt,
@@ -48,6 +49,7 @@ export function PixelEditor({ assetId, onClose }: PixelEditorProps) {
   const redoRef = useRef<PixelDocument[]>([]);
   const asset = useProjectStore((state) => state.assets[assetId]);
   const updateAssetSource = useProjectStore((state) => state.updateAssetSource);
+  const replaceAssets = useProjectStore((state) => state.replaceAssets);
   const [pixelDocument, setPixelDocument] = useState<PixelDocument | null>(null);
   const [activeLayerId, setActiveLayerId] = useState<string | null>(null);
   const [tool, setTool] = useState<PixelTool>('pencil');
@@ -101,8 +103,33 @@ export function PixelEditor({ assetId, onClose }: PixelEditorProps) {
 
   useEffect(() => {
     if (!pixelDocument) return;
-    updateAssetSource(assetId, toPngDataUrl(pixelDocument), pixelDocument.width, pixelDocument.height);
-  }, [assetId, pixelDocument, updateAssetSource]);
+    const src = toPngDataUrl(pixelDocument);
+    updateAssetSource(assetId, src, pixelDocument.width, pixelDocument.height);
+    const source = asset?.source;
+    const slice = asset?.slice;
+    const isWholeSourceSheet = Boolean(source && slice
+      && slice.x === 0
+      && slice.y === 0
+      && slice.width === source.width
+      && slice.height === source.height
+      && pixelDocument.width === source.width
+      && pixelDocument.height === source.height);
+    if (!source || !isWholeSourceSheet) return;
+    let cancelled = false;
+    void replaceAssetsFromSource(Object.values(useProjectStore.getState().assets), source.id, {
+      name: source.name,
+      src,
+      width: pixelDocument.width,
+      height: pixelDocument.height,
+    }).then((linkedAssets) => {
+      if (!cancelled) replaceAssets(linkedAssets);
+    }).catch(() => {
+      // Live editing remains available even when linked previews cannot refresh.
+    });
+    return () => { cancelled = true; };
+    // Pixel document changes are the save boundary; asset metadata is intentionally read once per edit session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assetId, pixelDocument, replaceAssets, updateAssetSource]);
 
   const pushHistory = (document: PixelDocument) => {
     historyRef.current = [...historyRef.current.slice(-29), clonePixelDocument(document)];

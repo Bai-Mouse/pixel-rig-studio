@@ -89,13 +89,20 @@ function cropImage(image: HTMLImageElement, slice: SpriteSlice): string {
   return canvas.toDataURL('image/png');
 }
 
-export async function createAssetsFromCandidate(candidate: SpriteImportCandidate, tileWidth = candidate.width, tileHeight = candidate.height): Promise<SpriteAsset[]> {
-  if (!Number.isInteger(tileWidth) || !Number.isInteger(tileHeight) || tileWidth < 1 || tileHeight < 1) throw new Error('Tile dimensions must be whole positive pixels.');
-  const columns = Math.floor(candidate.width / tileWidth);
-  const rows = Math.floor(candidate.height / tileHeight);
-  if (!columns || !rows) throw new Error('Tile dimensions are larger than the imported image.');
+export async function createAssetsFromSlices(candidate: SpriteImportCandidate, slices: SpriteSlice[]): Promise<SpriteAsset[]> {
+  const validSlices = slices.filter((slice) => Number.isInteger(slice.x)
+    && Number.isInteger(slice.y)
+    && Number.isInteger(slice.width)
+    && Number.isInteger(slice.height)
+    && slice.width > 0
+    && slice.height > 0
+    && slice.x >= 0
+    && slice.y >= 0
+    && slice.x + slice.width <= candidate.width
+    && slice.y + slice.height <= candidate.height);
+  if (!validSlices.length) throw new Error('Draw or keep at least one valid sprite region.');
   const source = sourceFor(candidate);
-  if (columns === 1 && rows === 1 && tileWidth === candidate.width && tileHeight === candidate.height) {
+  if (validSlices.length === 1 && validSlices[0].x === 0 && validSlices[0].y === 0 && validSlices[0].width === candidate.width && validSlices[0].height === candidate.height) {
     return [{
       id: `asset-${crypto.randomUUID()}`,
       name: candidate.name,
@@ -104,32 +111,38 @@ export async function createAssetsFromCandidate(candidate: SpriteImportCandidate
       width: candidate.width,
       height: candidate.height,
       source,
-      slice: { x: 0, y: 0, width: candidate.width, height: candidate.height },
+      slice: validSlices[0],
     }];
   }
   const image = await loadImage(candidate.src);
-  const assets: SpriteAsset[] = [];
-  for (let row = 0; row < rows; row += 1) {
-    for (let column = 0; column < columns; column += 1) {
-      const slice = { x: column * tileWidth, y: row * tileHeight, width: tileWidth, height: tileHeight };
-      assets.push({
-        id: `asset-${crypto.randomUUID()}`,
-        name: `${bareName(candidate.name)}_${String(row + 1).padStart(2, '0')}_${String(column + 1).padStart(2, '0')}.png`,
-        folder: 'Unsorted',
-        src: cropImage(image, slice),
-        width: tileWidth,
-        height: tileHeight,
-        source,
-        slice,
-      });
-    }
-  }
-  return assets;
+  return validSlices.map((slice, index) => ({
+    id: `asset-${crypto.randomUUID()}`,
+    name: `${bareName(candidate.name)}_part_${String(index + 1).padStart(2, '0')}.png`,
+    folder: 'Unsorted',
+    src: cropImage(image, slice),
+    width: slice.width,
+    height: slice.height,
+    source,
+    slice,
+  }));
 }
 
-export async function createAssetsFromDetectedParts(candidate: SpriteImportCandidate): Promise<SpriteAsset[]> {
+export async function createAssetsFromCandidate(candidate: SpriteImportCandidate, tileWidth = candidate.width, tileHeight = candidate.height): Promise<SpriteAsset[]> {
+  if (!Number.isInteger(tileWidth) || !Number.isInteger(tileHeight) || tileWidth < 1 || tileHeight < 1) throw new Error('Tile dimensions must be whole positive pixels.');
+  const columns = Math.floor(candidate.width / tileWidth);
+  const rows = Math.floor(candidate.height / tileHeight);
+  if (!columns || !rows) throw new Error('Tile dimensions are larger than the imported image.');
+  const slices: SpriteSlice[] = [];
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      slices.push({ x: column * tileWidth, y: row * tileHeight, width: tileWidth, height: tileHeight });
+    }
+  }
+  return createAssetsFromSlices(candidate, slices);
+}
+
+export async function detectSpriteParts(candidate: SpriteImportCandidate): Promise<SpriteSlice[]> {
   const image = await loadImage(candidate.src);
-  const source = sourceFor(candidate);
   const sourceCanvas = document.createElement('canvas');
   sourceCanvas.width = candidate.width;
   sourceCanvas.height = candidate.height;
@@ -174,7 +187,7 @@ export async function createAssetsFromDetectedParts(candidate: SpriteImportCandi
   }
   if (!components.length) throw new Error('No visible sprite parts were found in this PNG.');
   components.sort((left, right) => left.minY - right.minY || left.minX - right.minX);
-  return components.map((component, index) => {
+  return components.map((component) => {
     const width = component.maxX - component.minX + 1;
     const height = component.maxY - component.minY + 1;
     const mask = new Uint8Array(width * height);
@@ -184,17 +197,12 @@ export async function createAssetsFromDetectedParts(candidate: SpriteImportCandi
       mask[(y - component.minY) * width + x - component.minX] = 1;
     });
     const slice = { x: component.minX, y: component.minY, width, height, mask: encodeMask(mask) };
-    return {
-      id: `asset-${crypto.randomUUID()}`,
-      name: `${bareName(candidate.name)}_part_${String(index + 1).padStart(2, '0')}.png`,
-      folder: 'Unsorted',
-      src: cropImage(image, slice),
-      width,
-      height,
-      source,
-      slice,
-    };
+    return slice;
   });
+}
+
+export async function createAssetsFromDetectedParts(candidate: SpriteImportCandidate): Promise<SpriteAsset[]> {
+  return createAssetsFromSlices(candidate, await detectSpriteParts(candidate));
 }
 
 /** Re-renders every slice belonging to one imported PNG while preserving asset and node IDs. */
