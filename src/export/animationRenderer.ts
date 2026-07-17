@@ -56,6 +56,29 @@ function multiplyMatrices(parent: Matrix, child: Matrix): Matrix {
   };
 }
 
+function getWorldMatrix(nodes: Record<NodeId, RigNode>, frame: AnimationFrame, nodeId: NodeId, cache: Map<NodeId, Matrix>): Matrix {
+  const cached = cache.get(nodeId);
+  if (cached) return cached;
+  const node = nodes[nodeId];
+  if (!node) return identityMatrix;
+  const parent = node.parentId ? getWorldMatrix(nodes, frame, node.parentId, cache) : identityMatrix;
+  const world = multiplyMatrices(parent, matrixForState(stateFor(node, frame)));
+  cache.set(nodeId, world);
+  return world;
+}
+
+function orderedNodeIds(nodes: Record<NodeId, RigNode>, rootNodeIds: NodeId[]) {
+  const ids: NodeId[] = [];
+  const visit = (nodeId: NodeId) => {
+    const node = nodes[nodeId];
+    if (!node) return;
+    ids.push(nodeId);
+    node.children.forEach(visit);
+  };
+  rootNodeIds.forEach(visit);
+  return ids;
+}
+
 function loadImage(source: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -81,10 +104,9 @@ function renderFrameWithImages(project: RenderableProject, frameIndex: number, i
   context.imageSmoothingEnabled = false;
   context.translate(canvas.width / 2, canvas.height / 2);
 
-  const drawNode = (node: RigNode, parentMatrix: Matrix) => {
+  const drawNode = (node: RigNode, worldMatrix: Matrix) => {
     const nodeState = stateFor(node, frame);
     if (!node.visible || !nodeState.visible) return;
-    const worldMatrix = multiplyMatrices(parentMatrix, matrixForState(nodeState));
     const asset = node.assetId ? project.assets[node.assetId] : null;
     const image = asset ? images.get(asset.id) : null;
     if (asset && image) {
@@ -92,23 +114,30 @@ function renderFrameWithImages(project: RenderableProject, frameIndex: number, i
       const anchorY = snapToGrid(worldMatrix.f, project.settings.pixelGridSize);
       if (project.settings.pixelPerfectRotation) {
         const worldDeterminant = worldMatrix.a * worldMatrix.d - worldMatrix.b * worldMatrix.c;
-        const rasterized = spriteRasterCache.get(asset.id, image, {
-          angleRadians: Math.atan2(worldMatrix.b, worldMatrix.a),
-          scaleX: Math.hypot(worldMatrix.a, worldMatrix.b),
-          scaleY: Math.sign(worldDeterminant || 1) * Math.hypot(worldMatrix.c, worldMatrix.d),
-          pivotX: node.pivot.x,
-          pivotY: node.pivot.y,
-          pixelGridSize: project.settings.pixelGridSize,
-          alphaThreshold: DEFAULT_PIXEL_ALPHA_THRESHOLD,
-          fillSinglePixelGaps: true,
-          linearTransform: {
-            a: worldMatrix.a,
-            b: worldMatrix.b,
-            c: worldMatrix.c,
-            d: worldMatrix.d,
-          },
-        });
-        context.drawImage(rasterized.canvas, anchorX + rasterized.offsetX, anchorY + rasterized.offsetY);
+        try {
+          const rasterized = spriteRasterCache.get(asset.id, image, {
+            angleRadians: Math.atan2(worldMatrix.b, worldMatrix.a),
+            scaleX: Math.hypot(worldMatrix.a, worldMatrix.b),
+            scaleY: Math.sign(worldDeterminant || 1) * Math.hypot(worldMatrix.c, worldMatrix.d),
+            pivotX: node.pivot.x,
+            pivotY: node.pivot.y,
+            pixelGridSize: project.settings.pixelGridSize,
+            alphaThreshold: DEFAULT_PIXEL_ALPHA_THRESHOLD,
+            fillSinglePixelGaps: true,
+            linearTransform: {
+              a: worldMatrix.a,
+              b: worldMatrix.b,
+              c: worldMatrix.c,
+              d: worldMatrix.d,
+            },
+          });
+          context.drawImage(rasterized.canvas, anchorX + rasterized.offsetX, anchorY + rasterized.offsetY);
+        } catch {
+          context.save();
+          context.transform(worldMatrix.a, worldMatrix.b, worldMatrix.c, worldMatrix.d, anchorX, anchorY);
+          context.drawImage(image, -node.pivot.x, -node.pivot.y, asset.width, asset.height);
+          context.restore();
+        }
       } else {
         context.save();
         context.transform(worldMatrix.a, worldMatrix.b, worldMatrix.c, worldMatrix.d, anchorX, anchorY);
@@ -116,16 +145,15 @@ function renderFrameWithImages(project: RenderableProject, frameIndex: number, i
         context.restore();
       }
     }
-    node.children.forEach((childId) => {
-      const child = project.nodes[childId];
-      if (child) drawNode(child, worldMatrix);
-    });
   };
 
-  project.rootNodeIds.forEach((id) => {
-    const node = project.nodes[id];
-    if (node) drawNode(node, identityMatrix);
-  });
+  const matrixCache = new Map<NodeId, Matrix>();
+  orderedNodeIds(project.nodes, project.rootNodeIds)
+    .sort((leftId, rightId) => (project.nodes[leftId]?.sortingOrder ?? 0) - (project.nodes[rightId]?.sortingOrder ?? 0))
+    .forEach((id) => {
+      const node = project.nodes[id];
+      if (node) drawNode(node, getWorldMatrix(project.nodes, frame, id, matrixCache));
+    });
   return canvas;
 }
 

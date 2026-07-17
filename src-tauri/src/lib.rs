@@ -22,11 +22,20 @@ fn write_export_file_in_directory(directory: String, name: String, data: Vec<u8>
     write_bytes(&Path::new(&directory).join(name_path), data)
 }
 
+#[tauri::command]
+fn read_project_file(path: String) -> Result<String, String> {
+    let target = Path::new(&path);
+    if !target.is_file() {
+        return Err("Choose a valid project file.".into());
+    }
+    std::fs::read_to_string(target).map_err(|error| format!("Could not read {}: {error}", target.display()))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![write_export_file, write_export_file_in_directory])
+        .invoke_handler(tauri::generate_handler![write_export_file, write_export_file_in_directory, read_project_file])
         .run(tauri::generate_context!())
         .expect("error while running Pixel Rig Studio");
 }

@@ -1,0 +1,1410 @@
+{
+  "format": "pixel-rig-animation",
+  "version": 1,
+  "fps": 14,
+  "loop": false,
+  "canvasSize": {
+    "x": 320,
+    "y": 240
+  },
+  "nodes": {
+    "node-7a577b66-e660-4dd1-b19c-ec53f33e77cd": {
+      "name": "身体",
+      "parentId": null,
+      "assetId": "asset-6ecd1faa-94c7-43bc-b128-1904e33b2ee4",
+      "pivot": {
+        "x": 12,
+        "y": 9
+      }
+    },
+    "node-e292c465-613c-494a-a14d-7605039c1db4": {
+      "name": "裙子",
+      "parentId": "node-7a577b66-e660-4dd1-b19c-ec53f33e77cd",
+      "assetId": "asset-11432dcd-346d-4d8e-a237-286b42222442",
+      "pivot": {
+        "x": 11,
+        "y": 4
+      }
+    },
+    "node-2607f2bb-91b8-4a51-9909-121c8d8f1d5a": {
+      "name": "头部",
+      "parentId": "node-7a577b66-e660-4dd1-b19c-ec53f33e77cd",
+      "assetId": "asset-e1da2456-6651-4043-a786-02b6c129fb6e",
+      "pivot": {
+        "x": 13,
+        "y": 20
+      }
+    },
+    "node-4da053fd-f3f6-4ee8-b0a9-c66eb64e9d6f": {
+      "name": "右腿",
+      "parentId": "node-e292c465-613c-494a-a14d-7605039c1db4",
+      "assetId": "asset-21a722af-0a55-47d2-9ac8-fb108b184534",
+      "pivot": {
+        "x": 2,
+        "y": 6
+      }
+    },
+    "node-2b430455-fb04-4461-a624-2561835c295e": {
+      "name": "右小腿",
+      "parentId": "node-4da053fd-f3f6-4ee8-b0a9-c66eb64e9d6f",
+      "assetId": "asset-e6075c26-f0f8-436c-9fb1-8bf54a59fce9",
+      "pivot": {
+        "x": 3,
+        "y": 6
+      }
+    },
+    "node-d33bd593-6fd2-4d3b-83cf-8a8891e9f097": {
+      "name": "左腿",
+      "parentId": "node-e292c465-613c-494a-a14d-7605039c1db4",
+      "assetId": "asset-8e4ff359-aeb2-4733-992f-659548571405",
+      "pivot": {
+        "x": 2,
+        "y": 6
+      }
+    },
+    "node-4a07ad86-0b8c-42bf-92a8-80b96dc33f3f": {
+      "name": "左小腿",
+      "parentId": "node-d33bd593-6fd2-4d3b-83cf-8a8891e9f097",
+      "assetId": "asset-5742da33-0b19-4d61-b64d-921f1d59e34e",
+      "pivot": {
+        "x": 3,
+        "y": 6
+      }
+    },
+    "node-2f2f79f8-c37f-403c-b07c-3f3b6e55b975": {
+      "name": "左手",
+      "parentId": "node-7a577b66-e660-4dd1-b19c-ec53f33e77cd",
+      "assetId": "asset-473db8d1-fac0-4b2d-9baf-2d3f73617da0",
+      "pivot": {
+        "x": 2,
+        "y": 3
+      }
+    },
+    "node-1e4fa71f-8b96-43a1-af04-e365a5d33403": {
+      "name": "右手",
+      "parentId": "node-7a577b66-e660-4dd1-b19c-ec53f33e77cd",
+      "assetId": "asset-c41e9c81-c810-47cc-8640-55227d2a376c",
+      "pivot": {
+        "x": 2,
+        "y": 4
+      }
+    },
+    "node-76939b59-24a5-4e19-9ae5-2a14f3e7f2d5": {
+      "name": "右小臂",
+      "parentId": "node-1e4fa71f-8b96-43a1-af04-e365a5d33403",
+      "assetId": "asset-d2f27e44-98fb-4bf2-ae66-fae47e3e402b",
+      "pivot": {
+        "x": 2,
+        "y": 3
+      }
+    },
+    "node-084a2b51-c58f-402c-8caf-bdbcdb17b6b8": {
+      "name": "左小臂",
+      "parentId": "node-2f2f79f8-c37f-403c-b07c-3f3b6e55b975",
+      "assetId": "asset-f75f1aa0-38a5-40cc-96d7-14dc43384b68",
+      "pivot": {
+        "x": 2,
+        "y": 4
+      }
+    },
+    "node-63df471b-f0d9-42dc-b671-2e79fc535459": {
+      "name": "裙子后",
+      "parentId": "node-e292c465-613c-494a-a14d-7605039c1db4",
+      "assetId": "asset-46bcbda4-c245-4102-95f7-77106ccab312",
+      "pivot": {
+        "x": 7,
+        "y": 16
+      }
+    }
+  },
+  "frames": [
+    {
+      "id": "attack-01",
+      "nodeStates": {
+        "node-7a577b66-e660-4dd1-b19c-ec53f33e77cd": {
+          "position": {
+            "x": 2,
+            "y": 3
+          },
+          "rotation": 0,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-e292c465-613c-494a-a14d-7605039c1db4": {
+          "position": {
+            "x": 0,
+            "y": 3
+          },
+          "rotation": 0,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-2607f2bb-91b8-4a51-9909-121c8d8f1d5a": {
+          "position": {
+            "x": -1,
+            "y": -7
+          },
+          "rotation": 0,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-4da053fd-f3f6-4ee8-b0a9-c66eb64e9d6f": {
+          "position": {
+            "x": 0,
+            "y": 17
+          },
+          "rotation": 14.284967770082314,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-2b430455-fb04-4461-a624-2561835c295e": {
+          "position": {
+            "x": 1,
+            "y": 12
+          },
+          "rotation": 0,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-d33bd593-6fd2-4d3b-83cf-8a8891e9f097": {
+          "position": {
+            "x": -4,
+            "y": 19
+          },
+          "rotation": 0,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-4a07ad86-0b8c-42bf-92a8-80b96dc33f3f": {
+          "position": {
+            "x": 1,
+            "y": 11
+          },
+          "rotation": 0,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-2f2f79f8-c37f-403c-b07c-3f3b6e55b975": {
+          "position": {
+            "x": -8,
+            "y": 0
+          },
+          "rotation": 0,
+          "scale": {
+            "x": -1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-1e4fa71f-8b96-43a1-af04-e365a5d33403": {
+          "position": {
+            "x": 6,
+            "y": 1
+          },
+          "rotation": 0,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-76939b59-24a5-4e19-9ae5-2a14f3e7f2d5": {
+          "position": {
+            "x": 3,
+            "y": 7
+          },
+          "rotation": 0,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-084a2b51-c58f-402c-8caf-bdbcdb17b6b8": {
+          "position": {
+            "x": 2,
+            "y": 8
+          },
+          "rotation": 180,
+          "scale": {
+            "x": -1,
+            "y": -1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-63df471b-f0d9-42dc-b671-2e79fc535459": {
+          "position": {
+            "x": -2,
+            "y": 19
+          },
+          "rotation": 0,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        }
+      }
+    },
+    {
+      "id": "attack-02",
+      "nodeStates": {
+        "node-7a577b66-e660-4dd1-b19c-ec53f33e77cd": {
+          "position": {
+            "x": 1,
+            "y": 3
+          },
+          "rotation": -4,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-e292c465-613c-494a-a14d-7605039c1db4": {
+          "position": {
+            "x": 0,
+            "y": 3
+          },
+          "rotation": 2,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-2607f2bb-91b8-4a51-9909-121c8d8f1d5a": {
+          "position": {
+            "x": -1,
+            "y": -7
+          },
+          "rotation": -1,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-4da053fd-f3f6-4ee8-b0a9-c66eb64e9d6f": {
+          "position": {
+            "x": 0,
+            "y": 17
+          },
+          "rotation": 18,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-2b430455-fb04-4461-a624-2561835c295e": {
+          "position": {
+            "x": 1,
+            "y": 12
+          },
+          "rotation": -8,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-d33bd593-6fd2-4d3b-83cf-8a8891e9f097": {
+          "position": {
+            "x": -4,
+            "y": 19
+          },
+          "rotation": -8,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-4a07ad86-0b8c-42bf-92a8-80b96dc33f3f": {
+          "position": {
+            "x": 1,
+            "y": 11
+          },
+          "rotation": 10,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-2f2f79f8-c37f-403c-b07c-3f3b6e55b975": {
+          "position": {
+            "x": -8,
+            "y": 0
+          },
+          "rotation": 12,
+          "scale": {
+            "x": -1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-1e4fa71f-8b96-43a1-af04-e365a5d33403": {
+          "position": {
+            "x": 6,
+            "y": 1
+          },
+          "rotation": -32,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-76939b59-24a5-4e19-9ae5-2a14f3e7f2d5": {
+          "position": {
+            "x": 3,
+            "y": 7
+          },
+          "rotation": -45,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-084a2b51-c58f-402c-8caf-bdbcdb17b6b8": {
+          "position": {
+            "x": 2,
+            "y": 8
+          },
+          "rotation": 165,
+          "scale": {
+            "x": -1,
+            "y": -1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-63df471b-f0d9-42dc-b671-2e79fc535459": {
+          "position": {
+            "x": -2,
+            "y": 19
+          },
+          "rotation": 6,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        }
+      }
+    },
+    {
+      "id": "attack-03",
+      "nodeStates": {
+        "node-7a577b66-e660-4dd1-b19c-ec53f33e77cd": {
+          "position": {
+            "x": 1,
+            "y": 5
+          },
+          "rotation": -6,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-e292c465-613c-494a-a14d-7605039c1db4": {
+          "position": {
+            "x": 0,
+            "y": 4
+          },
+          "rotation": 4,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-2607f2bb-91b8-4a51-9909-121c8d8f1d5a": {
+          "position": {
+            "x": -1,
+            "y": -8
+          },
+          "rotation": -2,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-4da053fd-f3f6-4ee8-b0a9-c66eb64e9d6f": {
+          "position": {
+            "x": 0,
+            "y": 17
+          },
+          "rotation": 24,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-2b430455-fb04-4461-a624-2561835c295e": {
+          "position": {
+            "x": 1,
+            "y": 12
+          },
+          "rotation": -18,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-d33bd593-6fd2-4d3b-83cf-8a8891e9f097": {
+          "position": {
+            "x": -4,
+            "y": 19
+          },
+          "rotation": -15,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-4a07ad86-0b8c-42bf-92a8-80b96dc33f3f": {
+          "position": {
+            "x": 1,
+            "y": 11
+          },
+          "rotation": 20,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-2f2f79f8-c37f-403c-b07c-3f3b6e55b975": {
+          "position": {
+            "x": -8,
+            "y": 0
+          },
+          "rotation": 22,
+          "scale": {
+            "x": -1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-1e4fa71f-8b96-43a1-af04-e365a5d33403": {
+          "position": {
+            "x": 6,
+            "y": 1
+          },
+          "rotation": -52,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-76939b59-24a5-4e19-9ae5-2a14f3e7f2d5": {
+          "position": {
+            "x": 3,
+            "y": 7
+          },
+          "rotation": -65,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-084a2b51-c58f-402c-8caf-bdbcdb17b6b8": {
+          "position": {
+            "x": 2,
+            "y": 8
+          },
+          "rotation": 155,
+          "scale": {
+            "x": -1,
+            "y": -1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-63df471b-f0d9-42dc-b671-2e79fc535459": {
+          "position": {
+            "x": -2,
+            "y": 19
+          },
+          "rotation": 11,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        }
+      }
+    },
+    {
+      "id": "attack-04",
+      "nodeStates": {
+        "node-7a577b66-e660-4dd1-b19c-ec53f33e77cd": {
+          "position": {
+            "x": 3,
+            "y": 4
+          },
+          "rotation": 5,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-e292c465-613c-494a-a14d-7605039c1db4": {
+          "position": {
+            "x": 0,
+            "y": 3
+          },
+          "rotation": -3,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-2607f2bb-91b8-4a51-9909-121c8d8f1d5a": {
+          "position": {
+            "x": -1,
+            "y": -7
+          },
+          "rotation": 1,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-4da053fd-f3f6-4ee8-b0a9-c66eb64e9d6f": {
+          "position": {
+            "x": 0,
+            "y": 17
+          },
+          "rotation": 12,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-2b430455-fb04-4461-a624-2561835c295e": {
+          "position": {
+            "x": 1,
+            "y": 12
+          },
+          "rotation": -10,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-d33bd593-6fd2-4d3b-83cf-8a8891e9f097": {
+          "position": {
+            "x": -4,
+            "y": 19
+          },
+          "rotation": -4,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-4a07ad86-0b8c-42bf-92a8-80b96dc33f3f": {
+          "position": {
+            "x": 1,
+            "y": 11
+          },
+          "rotation": 14,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-2f2f79f8-c37f-403c-b07c-3f3b6e55b975": {
+          "position": {
+            "x": -8,
+            "y": 0
+          },
+          "rotation": -10,
+          "scale": {
+            "x": -1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-1e4fa71f-8b96-43a1-af04-e365a5d33403": {
+          "position": {
+            "x": 6,
+            "y": 1
+          },
+          "rotation": 38,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-76939b59-24a5-4e19-9ae5-2a14f3e7f2d5": {
+          "position": {
+            "x": 3,
+            "y": 7
+          },
+          "rotation": 48,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-084a2b51-c58f-402c-8caf-bdbcdb17b6b8": {
+          "position": {
+            "x": 2,
+            "y": 8
+          },
+          "rotation": 194,
+          "scale": {
+            "x": -1,
+            "y": -1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-63df471b-f0d9-42dc-b671-2e79fc535459": {
+          "position": {
+            "x": -2,
+            "y": 19
+          },
+          "rotation": -8,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        }
+      }
+    },
+    {
+      "id": "attack-05",
+      "nodeStates": {
+        "node-7a577b66-e660-4dd1-b19c-ec53f33e77cd": {
+          "position": {
+            "x": 4,
+            "y": 3
+          },
+          "rotation": 9,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-e292c465-613c-494a-a14d-7605039c1db4": {
+          "position": {
+            "x": 0,
+            "y": 3
+          },
+          "rotation": -6,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-2607f2bb-91b8-4a51-9909-121c8d8f1d5a": {
+          "position": {
+            "x": -1,
+            "y": -7
+          },
+          "rotation": 2,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-4da053fd-f3f6-4ee8-b0a9-c66eb64e9d6f": {
+          "position": {
+            "x": 0,
+            "y": 17
+          },
+          "rotation": 6,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-2b430455-fb04-4461-a624-2561835c295e": {
+          "position": {
+            "x": 1,
+            "y": 12
+          },
+          "rotation": -5,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-d33bd593-6fd2-4d3b-83cf-8a8891e9f097": {
+          "position": {
+            "x": -4,
+            "y": 19
+          },
+          "rotation": 4,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-4a07ad86-0b8c-42bf-92a8-80b96dc33f3f": {
+          "position": {
+            "x": 1,
+            "y": 11
+          },
+          "rotation": 8,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-2f2f79f8-c37f-403c-b07c-3f3b6e55b975": {
+          "position": {
+            "x": -8,
+            "y": 0
+          },
+          "rotation": -22,
+          "scale": {
+            "x": -1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-1e4fa71f-8b96-43a1-af04-e365a5d33403": {
+          "position": {
+            "x": 6,
+            "y": 1
+          },
+          "rotation": 68,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-76939b59-24a5-4e19-9ae5-2a14f3e7f2d5": {
+          "position": {
+            "x": 3,
+            "y": 7
+          },
+          "rotation": 72,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-084a2b51-c58f-402c-8caf-bdbcdb17b6b8": {
+          "position": {
+            "x": 2,
+            "y": 8
+          },
+          "rotation": 208,
+          "scale": {
+            "x": -1,
+            "y": -1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-63df471b-f0d9-42dc-b671-2e79fc535459": {
+          "position": {
+            "x": -2,
+            "y": 19
+          },
+          "rotation": -15,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        }
+      }
+    },
+    {
+      "id": "attack-06",
+      "nodeStates": {
+        "node-7a577b66-e660-4dd1-b19c-ec53f33e77cd": {
+          "position": {
+            "x": 3,
+            "y": 3
+          },
+          "rotation": 5,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-e292c465-613c-494a-a14d-7605039c1db4": {
+          "position": {
+            "x": 0,
+            "y": 3
+          },
+          "rotation": -4,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-2607f2bb-91b8-4a51-9909-121c8d8f1d5a": {
+          "position": {
+            "x": -1,
+            "y": -7
+          },
+          "rotation": 1,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-4da053fd-f3f6-4ee8-b0a9-c66eb64e9d6f": {
+          "position": {
+            "x": 0,
+            "y": 17
+          },
+          "rotation": 10,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-2b430455-fb04-4461-a624-2561835c295e": {
+          "position": {
+            "x": 1,
+            "y": 12
+          },
+          "rotation": -4,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-d33bd593-6fd2-4d3b-83cf-8a8891e9f097": {
+          "position": {
+            "x": -4,
+            "y": 19
+          },
+          "rotation": 0,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-4a07ad86-0b8c-42bf-92a8-80b96dc33f3f": {
+          "position": {
+            "x": 1,
+            "y": 11
+          },
+          "rotation": 8,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-2f2f79f8-c37f-403c-b07c-3f3b6e55b975": {
+          "position": {
+            "x": -8,
+            "y": 0
+          },
+          "rotation": -14,
+          "scale": {
+            "x": -1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-1e4fa71f-8b96-43a1-af04-e365a5d33403": {
+          "position": {
+            "x": 6,
+            "y": 1
+          },
+          "rotation": 48,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-76939b59-24a5-4e19-9ae5-2a14f3e7f2d5": {
+          "position": {
+            "x": 3,
+            "y": 7
+          },
+          "rotation": 35,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-084a2b51-c58f-402c-8caf-bdbcdb17b6b8": {
+          "position": {
+            "x": 2,
+            "y": 8
+          },
+          "rotation": 200,
+          "scale": {
+            "x": -1,
+            "y": -1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-63df471b-f0d9-42dc-b671-2e79fc535459": {
+          "position": {
+            "x": -2,
+            "y": 19
+          },
+          "rotation": -10,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        }
+      }
+    },
+    {
+      "id": "attack-07",
+      "nodeStates": {
+        "node-7a577b66-e660-4dd1-b19c-ec53f33e77cd": {
+          "position": {
+            "x": 2,
+            "y": 4
+          },
+          "rotation": 1,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-e292c465-613c-494a-a14d-7605039c1db4": {
+          "position": {
+            "x": 0,
+            "y": 3
+          },
+          "rotation": -1,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-2607f2bb-91b8-4a51-9909-121c8d8f1d5a": {
+          "position": {
+            "x": -1,
+            "y": -8
+          },
+          "rotation": 0,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-4da053fd-f3f6-4ee8-b0a9-c66eb64e9d6f": {
+          "position": {
+            "x": 0,
+            "y": 17
+          },
+          "rotation": 15,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-2b430455-fb04-4461-a624-2561835c295e": {
+          "position": {
+            "x": 1,
+            "y": 12
+          },
+          "rotation": -4,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-d33bd593-6fd2-4d3b-83cf-8a8891e9f097": {
+          "position": {
+            "x": -4,
+            "y": 19
+          },
+          "rotation": -3,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-4a07ad86-0b8c-42bf-92a8-80b96dc33f3f": {
+          "position": {
+            "x": 1,
+            "y": 11
+          },
+          "rotation": 5,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-2f2f79f8-c37f-403c-b07c-3f3b6e55b975": {
+          "position": {
+            "x": -8,
+            "y": 0
+          },
+          "rotation": -5,
+          "scale": {
+            "x": -1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-1e4fa71f-8b96-43a1-af04-e365a5d33403": {
+          "position": {
+            "x": 6,
+            "y": 1
+          },
+          "rotation": 15,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-76939b59-24a5-4e19-9ae5-2a14f3e7f2d5": {
+          "position": {
+            "x": 3,
+            "y": 7
+          },
+          "rotation": 10,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-084a2b51-c58f-402c-8caf-bdbcdb17b6b8": {
+          "position": {
+            "x": 2,
+            "y": 8
+          },
+          "rotation": 188,
+          "scale": {
+            "x": -1,
+            "y": -1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-63df471b-f0d9-42dc-b671-2e79fc535459": {
+          "position": {
+            "x": -2,
+            "y": 19
+          },
+          "rotation": -3,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        }
+      }
+    },
+    {
+      "id": "attack-08",
+      "nodeStates": {
+        "node-7a577b66-e660-4dd1-b19c-ec53f33e77cd": {
+          "position": {
+            "x": 2,
+            "y": 3
+          },
+          "rotation": 0,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-e292c465-613c-494a-a14d-7605039c1db4": {
+          "position": {
+            "x": 0,
+            "y": 3
+          },
+          "rotation": 0,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-2607f2bb-91b8-4a51-9909-121c8d8f1d5a": {
+          "position": {
+            "x": -1,
+            "y": -7
+          },
+          "rotation": 0,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-4da053fd-f3f6-4ee8-b0a9-c66eb64e9d6f": {
+          "position": {
+            "x": 0,
+            "y": 17
+          },
+          "rotation": 14.284967770082314,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-2b430455-fb04-4461-a624-2561835c295e": {
+          "position": {
+            "x": 1,
+            "y": 12
+          },
+          "rotation": 0,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-d33bd593-6fd2-4d3b-83cf-8a8891e9f097": {
+          "position": {
+            "x": -4,
+            "y": 19
+          },
+          "rotation": 0,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-4a07ad86-0b8c-42bf-92a8-80b96dc33f3f": {
+          "position": {
+            "x": 1,
+            "y": 11
+          },
+          "rotation": 0,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-2f2f79f8-c37f-403c-b07c-3f3b6e55b975": {
+          "position": {
+            "x": -8,
+            "y": 0
+          },
+          "rotation": 0,
+          "scale": {
+            "x": -1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-1e4fa71f-8b96-43a1-af04-e365a5d33403": {
+          "position": {
+            "x": 6,
+            "y": 1
+          },
+          "rotation": 0,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-76939b59-24a5-4e19-9ae5-2a14f3e7f2d5": {
+          "position": {
+            "x": 3,
+            "y": 7
+          },
+          "rotation": 0,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-084a2b51-c58f-402c-8caf-bdbcdb17b6b8": {
+          "position": {
+            "x": 2,
+            "y": 8
+          },
+          "rotation": 180,
+          "scale": {
+            "x": -1,
+            "y": -1
+          },
+          "visible": true,
+          "imageIndex": 0
+        },
+        "node-63df471b-f0d9-42dc-b671-2e79fc535459": {
+          "position": {
+            "x": -2,
+            "y": 19
+          },
+          "rotation": 0,
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "visible": true,
+          "imageIndex": 0
+        }
+      }
+    }
+  ]
+}

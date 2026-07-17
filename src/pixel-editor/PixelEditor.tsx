@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
+import { saveExportFile } from '../export/nativeSave';
 import { useProjectStore } from '../state/projectStore';
 import { replaceAssetsFromSource } from '../utils/importPng';
 import {
@@ -58,6 +59,10 @@ export function PixelEditor({ assetId, onClose }: PixelEditorProps) {
   const [showGrid, setShowGrid] = useState(true);
   const [symmetry, setSymmetry] = useState(false);
   const [historyVersion, setHistoryVersion] = useState(0);
+  const [isDirty, setIsDirty] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportStatus, setExportStatus] = useState<string | null>(null);
 
   useEffect(() => {
     if (!asset) return;
@@ -69,6 +74,7 @@ export function PixelEditor({ assetId, onClose }: PixelEditorProps) {
       historyRef.current = [];
       redoRef.current = [];
       setHistoryVersion((value) => value + 1);
+      setIsDirty(false);
       const fitZoom = Math.floor(430 / Math.max(document.width, document.height));
       setZoom(Math.max(4, Math.min(20, fitZoom)));
     }).catch(() => onClose());
@@ -101,36 +107,6 @@ export function PixelEditor({ assetId, onClose }: PixelEditorProps) {
     }
   }, [pixelDocument, showGrid, zoom]);
 
-  useEffect(() => {
-    if (!pixelDocument) return;
-    const src = toPngDataUrl(pixelDocument);
-    updateAssetSource(assetId, src, pixelDocument.width, pixelDocument.height);
-    const source = asset?.source;
-    const slice = asset?.slice;
-    const isWholeSourceSheet = Boolean(source && slice
-      && slice.x === 0
-      && slice.y === 0
-      && slice.width === source.width
-      && slice.height === source.height
-      && pixelDocument.width === source.width
-      && pixelDocument.height === source.height);
-    if (!source || !isWholeSourceSheet) return;
-    let cancelled = false;
-    void replaceAssetsFromSource(Object.values(useProjectStore.getState().assets), source.id, {
-      name: source.name,
-      src,
-      width: pixelDocument.width,
-      height: pixelDocument.height,
-    }).then((linkedAssets) => {
-      if (!cancelled) replaceAssets(linkedAssets);
-    }).catch(() => {
-      // Live editing remains available even when linked previews cannot refresh.
-    });
-    return () => { cancelled = true; };
-    // Pixel document changes are the save boundary; asset metadata is intentionally read once per edit session.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assetId, pixelDocument, replaceAssets, updateAssetSource]);
-
   const pushHistory = (document: PixelDocument) => {
     historyRef.current = [...historyRef.current.slice(-29), clonePixelDocument(document)];
     redoRef.current = [];
@@ -142,6 +118,7 @@ export function PixelEditor({ assetId, onClose }: PixelEditorProps) {
     if (!previous || !pixelDocument) return;
     redoRef.current.push(clonePixelDocument(pixelDocument));
     setPixelDocument(previous);
+    setIsDirty(true);
     setHistoryVersion((value) => value + 1);
   };
 
@@ -150,7 +127,60 @@ export function PixelEditor({ assetId, onClose }: PixelEditorProps) {
     if (!next || !pixelDocument) return;
     historyRef.current.push(clonePixelDocument(pixelDocument));
     setPixelDocument(next);
+    setIsDirty(true);
     setHistoryVersion((value) => value + 1);
+  };
+
+  const saveEdits = async () => {
+    if (!pixelDocument || !asset || !isDirty || isSaving) return;
+    setIsSaving(true);
+    try {
+      const src = toPngDataUrl(pixelDocument);
+      updateAssetSource(assetId, src, pixelDocument.width, pixelDocument.height);
+      const source = asset.source;
+      const slice = asset.slice;
+      const isWholeSourceSheet = Boolean(source && slice
+        && slice.x === 0
+        && slice.y === 0
+        && slice.width === source.width
+        && slice.height === source.height
+        && pixelDocument.width === source.width
+        && pixelDocument.height === source.height);
+      if (source && isWholeSourceSheet) {
+        const linkedAssets = await replaceAssetsFromSource(Object.values(useProjectStore.getState().assets), source.id, {
+          name: source.name,
+          src,
+          width: pixelDocument.width,
+          height: pixelDocument.height,
+        });
+        replaceAssets(linkedAssets);
+      }
+      setIsDirty(false);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const done = async () => {
+    if (isDirty) await saveEdits();
+    onClose();
+  };
+
+  const exportPng = async () => {
+    if (!pixelDocument || isExporting) return;
+    setIsExporting(true);
+    setExportStatus(null);
+    try {
+      const src = toPngDataUrl(pixelDocument);
+      const blob = await (await fetch(src)).blob();
+      const baseName = asset.name.replace(/\.png$/i, '') || 'sprite';
+      const result = await saveExportFile({ blob, name: `${baseName}.png` }, { name: 'PNG image', extensions: ['png'] });
+      setExportStatus(result === 'cancelled' ? 'PNG export cancelled' : result === 'saved' ? 'PNG saved' : 'PNG download started');
+    } catch {
+      setExportStatus('PNG export failed');
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   const pointFromEvent = (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -184,6 +214,7 @@ export function PixelEditor({ assetId, onClose }: PixelEditorProps) {
       return;
     }
     pushHistory(pixelDocument);
+    setIsDirty(true);
     if (tool === 'fill') {
       const next = clonePixelDocument(pixelDocument);
       floodFill(next, activeLayerId, point.x, point.y, hexToRgba(color), symmetry);
@@ -209,6 +240,7 @@ export function PixelEditor({ assetId, onClose }: PixelEditorProps) {
   const addLayer = () => {
     if (!pixelDocument) return;
     pushHistory(pixelDocument);
+    setIsDirty(true);
     const layer = { id: crypto.randomUUID(), name: `Layer ${pixelDocument.layers.length + 1}`, visible: true, pixels: new Uint8ClampedArray(pixelDocument.width * pixelDocument.height * 4) };
     setPixelDocument({ ...pixelDocument, layers: [...pixelDocument.layers, layer] });
     setActiveLayerId(layer.id);
@@ -217,12 +249,14 @@ export function PixelEditor({ assetId, onClose }: PixelEditorProps) {
   const toggleLayer = (layerId: string) => {
     if (!pixelDocument) return;
     pushHistory(pixelDocument);
+    setIsDirty(true);
     setPixelDocument({ ...pixelDocument, layers: pixelDocument.layers.map((layer) => layer.id === layerId ? { ...layer, visible: !layer.visible } : layer) });
   };
 
   const deleteLayer = () => {
     if (!pixelDocument || pixelDocument.layers.length === 1 || !activeLayerId) return;
     pushHistory(pixelDocument);
+    setIsDirty(true);
     const layers = pixelDocument.layers.filter((layer) => layer.id !== activeLayerId);
     setPixelDocument({ ...pixelDocument, layers });
     setActiveLayerId(layers.length ? layers[layers.length - 1].id : null);
@@ -234,8 +268,12 @@ export function PixelEditor({ assetId, onClose }: PixelEditorProps) {
     <div className="pixel-editor-overlay" role="dialog" aria-modal="true" aria-label="Pixel editor">
       <section className="pixel-editor">
         <header className="pixel-editor-header">
-          <div><span className="pixel-editor-mark" /> <strong>Pixel editor</strong><small>{asset.name} - live canvas update</small></div>
-          <button type="button" onClick={onClose}>Done</button>
+          <div><span className="pixel-editor-mark" /> <strong>Pixel editor</strong><small>{asset.name} - {isDirty ? 'unsaved changes' : 'saved'}</small></div>
+          <div className="pixel-editor-actions">
+            <button type="button" className="save-pixel-button" disabled={!isDirty || isSaving} onClick={() => void saveEdits()}>{isSaving ? 'Saving...' : 'Save'}</button>
+            <button type="button" disabled={isExporting} onClick={() => void exportPng()}><Icon name="download" size={13} /> {isExporting ? 'Exporting...' : 'Export PNG'}</button>
+            <button type="button" onClick={() => void done()}>{isSaving ? 'Saving...' : 'Done'}</button>
+          </div>
         </header>
         <div className="pixel-editor-body">
           <aside className="pixel-tools-panel">
@@ -263,7 +301,7 @@ export function PixelEditor({ assetId, onClose }: PixelEditorProps) {
             <div className="pixel-canvas-scroll">
               <canvas ref={canvasRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={() => { dragRef.current = null; }} onPointerCancel={() => { dragRef.current = null; }} />
             </div>
-            <footer>{pixelDocument.width} x {pixelDocument.height} px <span /> {tool} <span /> {historyVersion ? 'Edited' : 'Ready'}</footer>
+            <footer>{pixelDocument.width} x {pixelDocument.height} px <span /> {tool} <span /> {exportStatus ?? (isDirty ? 'Unsaved changes' : historyVersion ? 'Saved' : 'Ready')}</footer>
           </main>
           <aside className="pixel-layers-panel">
             <div className="layers-header"><span className="editor-section-label">LAYERS</span><button type="button" onClick={addLayer}><Icon name="plus" size={14} /></button></div>

@@ -8,8 +8,27 @@ interface FileExport {
   blob: Blob;
 }
 
-function isDesktopRuntime() {
+export function isDesktopRuntime() {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
+export async function saveProjectFile(name: string, content: string, existingPath?: string | null): Promise<string | null> {
+  if (!isDesktopRuntime()) {
+    browserDownload(new Blob([content], { type: 'application/json' }), name);
+    return `Browser download: ${name}`;
+  }
+  const path = existingPath ?? await save({ title: 'Save project', defaultPath: name, filters: [{ name: 'Pixel Rig Studio project', extensions: ['pixelrig.json', 'json'] }] });
+  if (!path) return null;
+  await invoke('write_export_file', { path, data: await bytes(new Blob([content], { type: 'application/json' })) });
+  return path;
+}
+
+export async function openProjectFileDialog(): Promise<{ path: string; content: string } | null> {
+  if (!isDesktopRuntime()) return null;
+  const path = await open({ title: 'Open project', multiple: false, directory: false, filters: [{ name: 'Pixel Rig Studio project', extensions: ['pixelrig.json', 'json'] }] });
+  if (!path || Array.isArray(path)) return null;
+  const content = await invoke<string>('read_project_file', { path });
+  return { path, content };
 }
 
 function browserDownload(blob: Blob, name: string) {

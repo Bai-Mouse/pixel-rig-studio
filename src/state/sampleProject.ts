@@ -37,6 +37,7 @@ const node = (
   parentId,
   children,
   assetId,
+  sortingOrder: 0,
   pivot: { x: 16, y: 16 },
   transform: { position: { x, y }, rotation: 0, scale: { x: 1, y: 1 } },
   visible: true,

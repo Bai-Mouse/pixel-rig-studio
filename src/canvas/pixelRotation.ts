@@ -148,6 +148,9 @@ export function rasterizeRotatedSprite(
   const bottom = Math.ceil(Math.max(...corners.map((point) => point.y)) / gridSize) * gridSize;
   const width = Math.max(1, right - left);
   const height = Math.max(1, bottom - top);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width > 8192 || height > 8192 || width * height > 16_000_000) {
+    throw new Error('Sprite scale is too large to rasterize safely.');
+  }
   const output = new ImageData(width, height);
   const inverseA = transform.d / determinant;
   const inverseB = -transform.b / determinant;

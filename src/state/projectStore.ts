@@ -71,6 +71,7 @@ interface ProjectState {
   renameNode: (nodeId: NodeId, name: string) => void;
   addChildNode: (parentId: NodeId) => void;
   reparentNode: (nodeId: NodeId, parentId: NodeId | null) => void;
+  setNodeSortingOrder: (nodeId: NodeId, sortingOrder: number) => void;
   toggleNodeVisibility: (id: NodeId) => void;
   toggleNodeLock: (id: NodeId) => void;
   selectFrame: (index: number) => void;
@@ -82,6 +83,7 @@ interface ProjectState {
   insertFrame: () => void;
   duplicateFrame: () => void;
   deleteFrame: () => void;
+  moveFrame: (fromIndex: number, toIndex: number) => void;
   applyAnimationTemplate: (template: AnimationTemplate) => void;
   loadAnimation: (animation: AnimationDataFile) => boolean;
   setActiveTool: (tool: TransformTool) => void;
@@ -215,6 +217,86 @@ function withFrameNodeState(frames: AnimationFrame[], frameIndex: number, nodeId
     : frame);
 }
 
+interface TransformMatrix {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e: number;
+  f: number;
+}
+
+const identityMatrix: TransformMatrix = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+
+function frameStateForNode(node: RigNode, frame: AnimationFrame): NodeFrameState {
+  return frame.nodeStates[node.id] ?? snapshotNode(node);
+}
+
+function matrixFromFrameState(frameState: NodeFrameState): TransformMatrix {
+  const radians = frameState.rotation * Math.PI / 180;
+  const cosine = Math.cos(radians);
+  const sine = Math.sin(radians);
+  return {
+    a: cosine * frameState.scale.x,
+    b: sine * frameState.scale.x,
+    c: -sine * frameState.scale.y,
+    d: cosine * frameState.scale.y,
+    e: frameState.position.x,
+    f: frameState.position.y,
+  };
+}
+
+function multiplyTransformMatrices(parent: TransformMatrix, child: TransformMatrix): TransformMatrix {
+  return {
+    a: parent.a * child.a + parent.c * child.b,
+    b: parent.b * child.a + parent.d * child.b,
+    c: parent.a * child.c + parent.c * child.d,
+    d: parent.b * child.c + parent.d * child.d,
+    e: parent.a * child.e + parent.c * child.f + parent.e,
+    f: parent.b * child.e + parent.d * child.f + parent.f,
+  };
+}
+
+function invertTransformMatrix(matrix: TransformMatrix): TransformMatrix | null {
+  const determinant = matrix.a * matrix.d - matrix.b * matrix.c;
+  if (Math.abs(determinant) < 0.000001) return null;
+  return {
+    a: matrix.d / determinant,
+    b: -matrix.b / determinant,
+    c: -matrix.c / determinant,
+    d: matrix.a / determinant,
+    e: (matrix.c * matrix.f - matrix.d * matrix.e) / determinant,
+    f: (matrix.b * matrix.e - matrix.a * matrix.f) / determinant,
+  };
+}
+
+function worldMatrixForNode(nodes: Record<NodeId, RigNode>, frame: AnimationFrame, nodeId: NodeId, cache: Map<NodeId, TransformMatrix>): TransformMatrix {
+  const cached = cache.get(nodeId);
+  if (cached) return cached;
+  const node = nodes[nodeId];
+  if (!node) return identityMatrix;
+  const parent = node.parentId ? worldMatrixForNode(nodes, frame, node.parentId, cache) : identityMatrix;
+  const matrix = multiplyTransformMatrices(parent, matrixFromFrameState(frameStateForNode(node, frame)));
+  cache.set(nodeId, matrix);
+  return matrix;
+}
+
+function stateWithMatrixTransform(state: NodeFrameState, matrix: TransformMatrix): NodeFrameState {
+  const scaleX = Math.hypot(matrix.a, matrix.b);
+  if (scaleX < 0.000001) return { ...state, position: { x: matrix.e, y: matrix.f } };
+  const determinant = matrix.a * matrix.d - matrix.b * matrix.c;
+  return {
+    ...state,
+    position: { x: matrix.e, y: matrix.f },
+    rotation: Math.atan2(matrix.b, matrix.a) * 180 / Math.PI,
+    scale: { x: scaleX, y: determinant / scaleX },
+  };
+}
+
+function defaultTransformFrame(nodes: Record<NodeId, RigNode>): AnimationFrame {
+  return { id: 'default-transforms', nodeStates: Object.fromEntries(Object.values(nodes).map((node) => [node.id, snapshotNode(node)])) };
+}
+
 function descendantsOf(nodes: Record<NodeId, RigNode>, nodeId: NodeId): NodeId[] {
   const node = nodes[nodeId];
   if (!node) return [];
@@ -342,6 +424,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       parentId: null,
       children: [],
       assetId,
+      sortingOrder: 0,
       pivot: { x: Math.floor(asset.width / 2), y: Math.floor(asset.height / 2) },
       transform: { position: { x: 0, y: 0 }, rotation: 0, scale: { x: 1, y: 1 } },
       visible: true,
@@ -390,9 +473,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         id,
         name: 'New Child',
         parentId,
-        children: [],
-        assetId: null,
-        pivot: { x: 0, y: 0 },
+      children: [],
+      assetId: null,
+      sortingOrder: 0,
+      pivot: { x: 0, y: 0 },
         transform: { position: { x: 0, y: 0 }, rotation: 0, scale: { x: 1, y: 1 } },
         visible: true,
         locked: false,
@@ -410,7 +494,21 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const node = state.nodes[nodeId];
       if (!node || node.parentId === parentId || (parentId && !state.nodes[parentId])) return {};
       if (parentId && descendantsOf(state.nodes, nodeId).includes(parentId)) return {};
-      let nodes: Record<NodeId, RigNode> = { ...state.nodes, [nodeId]: { ...node, parentId } };
+      const defaults = defaultTransformFrame(state.nodes);
+      const defaultCache = new Map<NodeId, TransformMatrix>();
+      const oldDefaultWorld = worldMatrixForNode(state.nodes, defaults, nodeId, defaultCache);
+      const newParentDefaultWorld = parentId ? worldMatrixForNode(state.nodes, defaults, parentId, defaultCache) : identityMatrix;
+      const inverseDefaultParent = invertTransformMatrix(newParentDefaultWorld);
+      if (!inverseDefaultParent) return {};
+      const defaultState = stateWithMatrixTransform(snapshotNode(node), multiplyTransformMatrices(inverseDefaultParent, oldDefaultWorld));
+      let nodes: Record<NodeId, RigNode> = {
+        ...state.nodes,
+        [nodeId]: {
+          ...node,
+          parentId,
+          transform: { position: defaultState.position, rotation: defaultState.rotation, scale: defaultState.scale },
+        },
+      };
       if (node.parentId) {
         const oldParent = nodes[node.parentId];
         nodes = { ...nodes, [oldParent.id]: { ...oldParent, children: oldParent.children.filter((childId) => childId !== nodeId) } };
@@ -421,7 +519,22 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }
       const rootNodeIds = state.rootNodeIds.filter((id) => id !== nodeId);
       if (!parentId) rootNodeIds.push(nodeId);
-      return { nodes, rootNodeIds };
+      const frames = state.frames.map((frame) => {
+        const cache = new Map<NodeId, TransformMatrix>();
+        const oldWorld = worldMatrixForNode(state.nodes, frame, nodeId, cache);
+        const newParentWorld = parentId ? worldMatrixForNode(state.nodes, frame, parentId, cache) : identityMatrix;
+        const inverseParent = invertTransformMatrix(newParentWorld);
+        if (!inverseParent) return frame;
+        const current = frameStateForNode(node, frame);
+        return { ...frame, nodeStates: { ...frame.nodeStates, [nodeId]: stateWithMatrixTransform(current, multiplyTransformMatrices(inverseParent, oldWorld)) } };
+      });
+      return { nodes, rootNodeIds, frames };
+    }),
+  setNodeSortingOrder: (nodeId, sortingOrder) =>
+    set((state) => {
+      const node = state.nodes[nodeId];
+      if (!node) return {};
+      return { nodes: { ...state.nodes, [nodeId]: { ...node, sortingOrder: Number.isFinite(sortingOrder) ? Math.round(sortingOrder) : 0 } } };
     }),
   toggleNodeVisibility: (id) =>
     set((state) => ({
@@ -470,6 +583,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         currentFrameIndex: Math.min(state.currentFrameIndex, frames.length - 1),
         isPlaying: false,
       };
+    }),
+  moveFrame: (fromIndex, toIndex) =>
+    set((state) => {
+      if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= state.frames.length || toIndex >= state.frames.length) return {};
+      const frames = [...state.frames];
+      const [movedFrame] = frames.splice(fromIndex, 1);
+      frames.splice(toIndex, 0, movedFrame);
+      return { frames, currentFrameIndex: toIndex, isPlaying: false, transformSession: null };
     }),
   applyAnimationTemplate: (template) =>
     set((state) => {

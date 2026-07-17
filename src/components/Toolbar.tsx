@@ -80,7 +80,7 @@ export function Toolbar({ onNewProject, onOpenProject, onSaveProject, onOpenRece
       <button className="file-tool" type="button" onClick={onSaveProject}><Icon name="download" /> Save</button>
       <select className="recent-projects" aria-label="Recent projects" value="" onChange={(event) => { const recent = recentProjects.find((item) => item.id === event.target.value); if (recent) onOpenRecent(recent); }}>
         <option value="">Recent</option>
-        {recentProjects.map((recent) => <option key={recent.id} value={recent.id}>{recent.name}</option>)}
+        {recentProjects.map((recent) => <option key={recent.id} value={recent.id}>{recent.name} — {recent.path ?? 'Saved project snapshot'}</option>)}
       </select>
       <div className="toolbar-spacer" />
       <button className="tool-button" type="button" onClick={onToggleGrid} aria-pressed={showGrid}>

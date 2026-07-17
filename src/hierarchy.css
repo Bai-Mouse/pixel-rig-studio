@@ -1,0 +1,8 @@
+.node-row { padding-right: 3px; }
+.node-chevron { width: 17px; height: 24px; display: grid; flex: 0 0 auto; place-items: center; padding: 0; border: 0; color: #858ca7; background: transparent; cursor: pointer; transform: none; }
+.node-chevron:hover:not(:disabled) { color: #d9deff; background: #2d3348; }
+.node-chevron svg { transition: transform .14s ease; transform: rotate(0deg); }
+.node-chevron.expanded svg { transform: rotate(90deg); }
+.node-chevron.blank { visibility: hidden; }
+.node-main[draggable="true"] { cursor: grab; }
+.node-main[draggable="true"]:active { cursor: grabbing; }

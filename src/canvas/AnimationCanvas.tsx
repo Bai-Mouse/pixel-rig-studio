@@ -25,7 +25,7 @@ interface TransformDrag {
   startState: NodeFrameState;
   center: Vec2;
   startAngle: number;
-  startDistance: number;
+  startScaleAxes: Vec2;
 }
 
 const identityMatrix: Matrix = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
@@ -75,6 +75,26 @@ function inverseTransformPoint(matrix: Matrix, point: Vec2): Vec2 | null {
   const x = point.x - matrix.e;
   const y = point.y - matrix.f;
   return { x: (matrix.d * x - matrix.c * y) / determinant, y: (-matrix.b * x + matrix.a * y) / determinant };
+}
+
+/** Converts a world point into the node's rotated, but unscaled, local axes. */
+function pointInNodeScaleAxes(parentMatrix: Matrix, state: NodeFrameState, worldPoint: Vec2): Vec2 | null {
+  const pointInParent = inverseTransformPoint(parentMatrix, worldPoint);
+  if (!pointInParent) return null;
+  const x = pointInParent.x - state.position.x;
+  const y = pointInParent.y - state.position.y;
+  const radians = state.rotation * Math.PI / 180;
+  const cosine = Math.cos(radians);
+  const sine = Math.sin(radians);
+  return { x: cosine * x + sine * y, y: -sine * x + cosine * y };
+}
+
+function scaledAxis(startScale: number, startAxis: number, currentAxis: number) {
+  if (!Number.isFinite(startScale) || !Number.isFinite(startAxis) || !Number.isFinite(currentAxis) || Math.abs(startAxis) < 0.5) return startScale;
+  const raw = startScale * currentAxis / startAxis;
+  if (!Number.isFinite(raw)) return startScale;
+  const sign = raw < 0 ? -1 : raw > 0 ? 1 : Math.sign(startScale) || 1;
+  return sign * Math.min(16, Math.max(0.05, Math.abs(raw)));
 }
 
 function getWorldMatrix(nodes: Record<string, RigNode>, frame: AnimationFrame, nodeId: string, cache: Map<string, Matrix>): Matrix {
@@ -242,36 +262,45 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
 
           if (settings.pixelPerfectRotation) {
             const worldDeterminant = worldMatrix.a * worldMatrix.d - worldMatrix.b * worldMatrix.c;
-            const rasterized = spriteRasterCache.get(asset.id, image, {
-              angleRadians: Math.atan2(worldMatrix.b, worldMatrix.a),
-              scaleX: Math.hypot(worldMatrix.a, worldMatrix.b),
-              scaleY: Math.sign(worldDeterminant || 1) * Math.hypot(worldMatrix.c, worldMatrix.d),
-              pivotX: node.pivot.x,
-              pivotY: node.pivot.y,
-              pixelGridSize: settings.pixelGridSize,
-              alphaThreshold: DEFAULT_PIXEL_ALPHA_THRESHOLD,
-              fillSinglePixelGaps: true,
-              linearTransform: {
-                a: worldMatrix.a,
-                b: worldMatrix.b,
-                c: worldMatrix.c,
-                d: worldMatrix.d,
-              },
-            });
-            context.drawImage(rasterized.canvas, anchorX + rasterized.offsetX, anchorY + rasterized.offsetY);
-            if (showSelection && node.id === selectedNodeId) {
+            try {
+              const rasterized = spriteRasterCache.get(asset.id, image, {
+                angleRadians: Math.atan2(worldMatrix.b, worldMatrix.a),
+                scaleX: Math.hypot(worldMatrix.a, worldMatrix.b),
+                scaleY: Math.sign(worldDeterminant || 1) * Math.hypot(worldMatrix.c, worldMatrix.d),
+                pivotX: node.pivot.x,
+                pivotY: node.pivot.y,
+                pixelGridSize: settings.pixelGridSize,
+                alphaThreshold: DEFAULT_PIXEL_ALPHA_THRESHOLD,
+                fillSinglePixelGaps: true,
+                linearTransform: {
+                  a: worldMatrix.a,
+                  b: worldMatrix.b,
+                  c: worldMatrix.c,
+                  d: worldMatrix.d,
+                },
+              });
+              context.drawImage(rasterized.canvas, anchorX + rasterized.offsetX, anchorY + rasterized.offsetY);
+              if (showSelection && node.id === selectedNodeId) {
+                context.save();
+                context.strokeStyle = '#9ea9ff';
+                context.lineWidth = 1 / zoom;
+                context.strokeRect(
+                  anchorX + rasterized.offsetX - 2 / zoom,
+                  anchorY + rasterized.offsetY - 2 / zoom,
+                  rasterized.width + 4 / zoom,
+                  rasterized.height + 4 / zoom,
+                );
+                context.restore();
+              }
+              drawTransformOverlays(anchorX, anchorY, false);
+            } catch {
+              // A malformed or extreme scale should not take down the entire canvas.
               context.save();
-              context.strokeStyle = '#9ea9ff';
-              context.lineWidth = 1 / zoom;
-              context.strokeRect(
-                anchorX + rasterized.offsetX - 2 / zoom,
-                anchorY + rasterized.offsetY - 2 / zoom,
-                rasterized.width + 4 / zoom,
-                rasterized.height + 4 / zoom,
-              );
+              context.transform(worldMatrix.a, worldMatrix.b, worldMatrix.c, worldMatrix.d, anchorX, anchorY);
+              context.drawImage(image, -node.pivot.x, -node.pivot.y, asset.width, asset.height);
               context.restore();
+              drawTransformOverlays(anchorX, anchorY, true);
             }
-            drawTransformOverlays(anchorX, anchorY, false);
           } else {
             context.save();
             context.transform(worldMatrix.a, worldMatrix.b, worldMatrix.c, worldMatrix.d, anchorX, anchorY);
@@ -281,20 +310,18 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
           }
         }
       }
-      node.children.forEach((id) => {
-        const child = nodes[id];
-        if (child) drawNode(child, frame, showSelection, matrixCache);
-      });
     };
     const drawFrame = (frame: AnimationFrame | undefined, opacity: number, showSelection: boolean) => {
       if (!frame) return;
       context.save();
       context.globalAlpha = opacity;
       const matrixCache = new Map<string, Matrix>();
-      roots.forEach((id) => {
+      orderedNodes(nodes, roots)
+        .sort((leftId, rightId) => (nodes[leftId]?.sortingOrder ?? 0) - (nodes[rightId]?.sortingOrder ?? 0))
+        .forEach((id) => {
         const node = nodes[id];
         if (node) drawNode(node, frame, showSelection, matrixCache);
-      });
+        });
       context.restore();
     };
     if (onionSkinEnabled) {
@@ -392,10 +419,12 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
           const worldPoint = pointerToWorld(event);
           if (!frame || !worldPoint) return;
           const hitNodeId = hitTest(worldPoint, frame);
-          if (hitNodeId) selectNode(hitNodeId);
-          const nodeId = hitNodeId ?? selectedNodeId;
-          const node = nodeId ? nodes[nodeId] : null;
-          if (!node || node.locked || activeTool === 'select') return;
+          if (activeTool === 'select') {
+            selectNode(hitNodeId);
+            return;
+          }
+          const node = selectedNodeId ? nodes[selectedNodeId] : null;
+          if (!node || node.locked) return;
           const cache = new Map<string, Matrix>();
           const nodeMatrix = getWorldMatrix(nodes, frame, node.id, cache);
           const parentMatrix = node.parentId ? getWorldMatrix(nodes, frame, node.parentId, cache) : identityMatrix;
@@ -422,7 +451,7 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
             startState: { ...startState, position: { ...startState.position }, scale: { ...startState.scale } },
             center,
             startAngle: Math.atan2(worldPoint.y - center.y, worldPoint.x - center.x),
-            startDistance: Math.max(0.001, Math.hypot(worldPoint.x - center.x, worldPoint.y - center.y)),
+            startScaleAxes: pointInNodeScaleAxes(parentMatrix, startState, worldPoint) ?? { x: 0, y: 0 },
           };
           beginTransform(node.id);
         }}
@@ -447,9 +476,14 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
             updateNodeFrame(drag.nodeId, { rotation: degrees });
           }
           if (drag.tool === 'scale') {
-            const distance = Math.hypot(worldPoint.x - drag.center.x, worldPoint.y - drag.center.y);
-            const factor = Math.max(0.1, distance / drag.startDistance);
-            updateNodeFrame(drag.nodeId, { scale: { x: snap(drag.startState.scale.x * factor, 0.1), y: snap(drag.startState.scale.y * factor, 0.1) } });
+            const currentAxes = pointInNodeScaleAxes(drag.parentMatrix, drag.startState, worldPoint);
+            if (!currentAxes) return;
+            updateNodeFrame(drag.nodeId, {
+              scale: {
+                x: scaledAxis(drag.startState.scale.x, drag.startScaleAxes.x, currentAxes.x),
+                y: scaledAxis(drag.startState.scale.y, drag.startScaleAxes.y, currentAxes.y),
+              },
+            });
           }
         }}
         onPointerUp={() => {

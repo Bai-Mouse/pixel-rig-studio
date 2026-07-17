@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import '../source-preview.css';
 import { Icon } from './Icon';
 import { useProjectStore } from '../state/projectStore';
-import { filesToImportCandidates, replaceAssetsFromSource } from '../utils/importPng';
-import type { SpriteAsset } from '../types/project';
+import { cropAssetFromSource, filesToImportCandidates, replaceAssetsFromSource } from '../utils/importPng';
+import type { SpriteAsset, SpriteSlice } from '../types/project';
 
 const Pair = ({ label, value }: { label: string; value: string }) => <div className="property-pair"><span>{label}</span><strong>{value}</strong></div>;
 
@@ -11,8 +11,27 @@ interface PropertiesPanelProps {
   onEditAsset: (assetId: string) => void;
 }
 
+interface SliceDrag {
+  mode: 'move' | 'resize';
+  start: { x: number; y: number };
+  slice: SpriteSlice;
+}
+
+function clampSlice(slice: SpriteSlice, sourceWidth: number, sourceHeight: number): SpriteSlice {
+  const width = Math.max(1, Math.min(sourceWidth, Math.round(slice.width)));
+  const height = Math.max(1, Math.min(sourceHeight, Math.round(slice.height)));
+  return {
+    x: Math.max(0, Math.min(sourceWidth - width, Math.round(slice.x))),
+    y: Math.max(0, Math.min(sourceHeight - height, Math.round(slice.y))),
+    width,
+    height,
+  };
+}
+
 export function PropertiesPanel({ onEditAsset }: PropertiesPanelProps) {
   const replacementInputRef = useRef<HTMLInputElement>(null);
+  const sourceStageRef = useRef<HTMLDivElement>(null);
+  const sliceDragRef = useRef<SliceDrag | null>(null);
   const selectedNodeId = useProjectStore((state) => state.selectedNodeId);
   const selectedAssetId = useProjectStore((state) => state.selectedAssetId);
   const selectedAssetIds = useProjectStore((state) => state.selectedAssetIds);
@@ -24,6 +43,7 @@ export function PropertiesPanel({ onEditAsset }: PropertiesPanelProps) {
   const commitTransform = useProjectStore((state) => state.commitTransform);
   const flipNode = useProjectStore((state) => state.flipNode);
   const resetNodeTransform = useProjectStore((state) => state.resetNodeTransform);
+  const setNodeSortingOrder = useProjectStore((state) => state.setNodeSortingOrder);
   const setNodeAsset = useProjectStore((state) => state.setNodeAsset);
   const renameNode = useProjectStore((state) => state.renameNode);
   const createNodeForAsset = useProjectStore((state) => state.createNodeForAsset);
@@ -42,6 +62,8 @@ export function PropertiesPanel({ onEditAsset }: PropertiesPanelProps) {
   const [draftName, setDraftName] = useState('');
   const [assetMessage, setAssetMessage] = useState('');
   const [isReplacing, setIsReplacing] = useState(false);
+  const [sliceDraft, setSliceDraft] = useState<SpriteSlice | null>(null);
+  const [isUpdatingSlice, setIsUpdatingSlice] = useState(false);
   const frameState = node ? currentFrame?.nodeStates[node.id] : null;
   const transform = frameState ?? {
     position: node?.transform.position ?? { x: 0, y: 0 },
@@ -59,6 +81,10 @@ export function PropertiesPanel({ onEditAsset }: PropertiesPanelProps) {
     setAssetMessage('');
   }, [selectedAssetId, selectedAssetIds.length]);
 
+  useEffect(() => {
+    setSliceDraft(selectedAsset?.slice ? { ...selectedAsset.slice } : null);
+  }, [selectedAsset?.id, selectedAsset?.slice?.x, selectedAsset?.slice?.y, selectedAsset?.slice?.width, selectedAsset?.slice?.height]);
+
   const replaceSource = async (files: FileList | null) => {
     if (!selectedAsset?.source || !files?.length) return;
     setIsReplacing(true);
@@ -73,6 +99,57 @@ export function PropertiesPanel({ onEditAsset }: PropertiesPanelProps) {
       setAssetMessage(error instanceof Error ? error.message : 'Could not replace the source image.');
     } finally {
       setIsReplacing(false);
+    }
+  };
+
+  const updateSliceDraft = (patch: Partial<SpriteSlice>) => {
+    if (!selectedAsset?.source) return;
+    setSliceDraft((current) => current ? clampSlice({ ...current, ...patch }, selectedAsset.source!.width, selectedAsset.source!.height) : current);
+  };
+
+  const sourcePointFromEvent = (event: React.PointerEvent<HTMLElement>) => {
+    if (!selectedAsset?.source || !sourceStageRef.current) return null;
+    const rect = sourceStageRef.current.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    return {
+      x: Math.max(0, Math.min(selectedAsset.source.width, Math.round((event.clientX - rect.left) / rect.width * selectedAsset.source.width))),
+      y: Math.max(0, Math.min(selectedAsset.source.height, Math.round((event.clientY - rect.top) / rect.height * selectedAsset.source.height))),
+    };
+  };
+
+  const beginSliceDrag = (event: React.PointerEvent<HTMLSpanElement>, mode: SliceDrag['mode']) => {
+    const point = sourcePointFromEvent(event);
+    if (!point || !sliceDraft) return;
+    event.preventDefault();
+    event.stopPropagation();
+    sourceStageRef.current?.setPointerCapture(event.pointerId);
+    sliceDragRef.current = { mode, start: point, slice: { ...sliceDraft } };
+  };
+
+  const moveSliceDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = sliceDragRef.current;
+    const point = sourcePointFromEvent(event);
+    if (!drag || !point || !selectedAsset?.source) return;
+    const deltaX = point.x - drag.start.x;
+    const deltaY = point.y - drag.start.y;
+    const next = drag.mode === 'move'
+      ? { ...drag.slice, x: drag.slice.x + deltaX, y: drag.slice.y + deltaY }
+      : { ...drag.slice, width: Math.max(1, drag.slice.width + deltaX), height: Math.max(1, drag.slice.height + deltaY) };
+    setSliceDraft(clampSlice(next, selectedAsset.source.width, selectedAsset.source.height));
+  };
+
+  const applySlice = async () => {
+    if (!selectedAsset || !selectedAsset.source || !sliceDraft) return;
+    setIsUpdatingSlice(true);
+    setAssetMessage('Updating linked sprite region...');
+    try {
+      const updated = await cropAssetFromSource(selectedAsset, sliceDraft);
+      replaceAssets([updated]);
+      setAssetMessage('Source region updated without changing node bindings.');
+    } catch (error) {
+      setAssetMessage(error instanceof Error ? error.message : 'Could not update the source region.');
+    } finally {
+      setIsUpdatingSlice(false);
     }
   };
 
@@ -106,12 +183,26 @@ export function PropertiesPanel({ onEditAsset }: PropertiesPanelProps) {
             {selectedAsset.slice && <Pair label="Source region" value={`${selectedAsset.slice.x}, ${selectedAsset.slice.y} · ${selectedAsset.slice.width} x ${selectedAsset.slice.height}`} />}
           </div>
           {selectedAsset.source && <div className="property-group">
-            <h3>Source PNG preview</h3>
-            <div className="source-image-stage" style={{ aspectRatio: `${selectedAsset.source.width} / ${selectedAsset.source.height}` }}>
+            <h3>Source PNG crop</h3>
+            <div
+              ref={sourceStageRef}
+              className="source-image-stage editable-source-stage"
+              style={{ aspectRatio: `${selectedAsset.source.width} / ${selectedAsset.source.height}` }}
+              onPointerMove={moveSliceDrag}
+              onPointerUp={() => { sliceDragRef.current = null; }}
+              onPointerCancel={() => { sliceDragRef.current = null; }}
+            >
               <img src={selectedAsset.source.src} alt={`${selectedAsset.source.name} source preview`} />
-              {selectedAsset.slice && <span className="source-slice-outline" style={{ left: `${selectedAsset.slice.x / selectedAsset.source.width * 100}%`, top: `${selectedAsset.slice.y / selectedAsset.source.height * 100}%`, width: `${selectedAsset.slice.width / selectedAsset.source.width * 100}%`, height: `${selectedAsset.slice.height / selectedAsset.source.height * 100}%` }} />}
+              {sliceDraft && <span className="source-slice-outline editable" onPointerDown={(event) => beginSliceDrag(event, 'move')} style={{ left: `${sliceDraft.x / selectedAsset.source.width * 100}%`, top: `${sliceDraft.y / selectedAsset.source.height * 100}%`, width: `${sliceDraft.width / selectedAsset.source.width * 100}%`, height: `${sliceDraft.height / selectedAsset.source.height * 100}%` }}><span className="source-slice-resize-handle" onPointerDown={(event) => beginSliceDrag(event, 'resize')} /></span>}
             </div>
-            <p className="source-image-caption">The highlighted box is this sprite's linked source region.</p>
+            {sliceDraft && <div className="source-slice-inputs">
+              <label>X<input type="number" value={sliceDraft.x} onChange={(event) => updateSliceDraft({ x: Number(event.target.value) })} /></label>
+              <label>Y<input type="number" value={sliceDraft.y} onChange={(event) => updateSliceDraft({ y: Number(event.target.value) })} /></label>
+              <label>W<input type="number" min="1" value={sliceDraft.width} onChange={(event) => updateSliceDraft({ width: Number(event.target.value) })} /></label>
+              <label>H<input type="number" min="1" value={sliceDraft.height} onChange={(event) => updateSliceDraft({ height: Number(event.target.value) })} /></label>
+            </div>}
+            {sliceDraft && <button className="apply-slice-button" type="button" disabled={isUpdatingSlice} onClick={() => void applySlice()}>{isUpdatingSlice ? 'Updating crop...' : 'Apply source crop'}</button>}
+            <p className="source-image-caption">Drag the highlighted box to move it, drag its lower-right handle to resize it, then apply the crop.</p>
           </div>}
           <div className="property-group asset-management-actions">
             <h3>Actions</h3>
@@ -142,6 +233,11 @@ export function PropertiesPanel({ onEditAsset }: PropertiesPanelProps) {
             {nodeAsset && <div className="node-texture-preview"><span className="checkerboard"><img src={nodeAsset.src} alt="" /></span><div><strong>{nodeAsset.name}</strong><small>{nodeAsset.folder || 'Unsorted'}</small></div></div>}
             <Pair label="Size" value={nodeAsset ? `${nodeAsset.width} x ${nodeAsset.height} px` : '—'} />
             <p className="node-edit-hint">Choose any imported image to assign it directly to this node.</p>
+          </div>
+          <div className="property-group node-edit-group">
+            <h3>Sorting order</h3>
+            <label className="node-name-input">Layer order<input type="number" step="1" value={node.sortingOrder ?? 0} onChange={(event) => setNodeSortingOrder(node.id, Number(event.target.value))} /></label>
+            <p className="node-edit-hint">Higher values draw in front of lower values.</p>
           </div>
           <div className="property-group">
             <h3>Pivot</h3>

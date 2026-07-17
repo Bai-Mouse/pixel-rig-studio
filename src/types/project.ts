@@ -42,6 +42,8 @@ export interface RigNode {
   parentId: NodeId | null;
   children: NodeId[];
   assetId: AssetId | null;
+  /** Higher values are drawn in front of lower values. */
+  sortingOrder?: number;
   pivot: Vec2;
   transform: {
     position: Vec2;

@@ -205,6 +205,29 @@ export async function createAssetsFromDetectedParts(candidate: SpriteImportCandi
   return createAssetsFromSlices(candidate, await detectSpriteParts(candidate));
 }
 
+/** Re-crops one linked sprite while retaining its ID, source link, and node assignments. */
+export async function cropAssetFromSource(asset: SpriteAsset, slice: SpriteSlice): Promise<SpriteAsset> {
+  if (!asset.source) throw new Error('This sprite has no linked source PNG.');
+  const width = Math.max(1, Math.min(asset.source.width, Math.round(slice.width)));
+  const height = Math.max(1, Math.min(asset.source.height, Math.round(slice.height)));
+  const x = Math.max(0, Math.min(asset.source.width - width, Math.round(slice.x)));
+  const y = Math.max(0, Math.min(asset.source.height - height, Math.round(slice.y)));
+  const geometry = { x, y, width, height };
+  const keepMask = asset.slice
+    && asset.slice.x === x && asset.slice.y === y
+    && asset.slice.width === width && asset.slice.height === height
+    ? asset.slice.mask
+    : undefined;
+  const image = await loadImage(asset.source.src);
+  return {
+    ...asset,
+    src: cropImage(image, { ...geometry, ...(keepMask ? { mask: keepMask } : {}) }),
+    width,
+    height,
+    slice: { ...geometry, ...(keepMask ? { mask: keepMask } : {}) },
+  };
+}
+
 /** Re-renders every slice belonging to one imported PNG while preserving asset and node IDs. */
 export async function replaceAssetsFromSource(assets: SpriteAsset[], sourceId: string, candidate: SpriteImportCandidate): Promise<SpriteAsset[]> {
   const related = assets.filter((asset) => asset.source?.id === sourceId && asset.slice);

@@ -3,6 +3,7 @@ import type { ProjectFile } from '../export/projectSerializer';
 export interface RecentProject {
   id: string;
   name: string;
+  path?: string;
   savedAt: string;
   project: ProjectFile;
 }
@@ -20,9 +21,9 @@ export function readRecentProjects(): RecentProject[] {
   }
 }
 
-export function rememberProject(project: ProjectFile, name: string): RecentProject[] {
-  const entry: RecentProject = { id: crypto.randomUUID(), name, savedAt: project.savedAt, project };
-  const recent = [entry, ...readRecentProjects().filter((item) => item.name !== name)].slice(0, 5);
+export function rememberProject(project: ProjectFile, name: string, path?: string): RecentProject[] {
+  const entry: RecentProject = { id: crypto.randomUUID(), name, path, savedAt: project.savedAt, project };
+  const recent = [entry, ...readRecentProjects().filter((item) => (path ? item.path !== path : item.name !== name))].slice(0, 5);
   try {
     window.localStorage.setItem(storageKey, JSON.stringify(recent));
   } catch {
@@ -30,4 +31,3 @@ export function rememberProject(project: ProjectFile, name: string): RecentProje
   }
   return recent;
 }
-

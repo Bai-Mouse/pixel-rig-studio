@@ -11,6 +11,7 @@ import { ProjectStartScreen } from './ProjectStartScreen';
 import { parseProjectFile, projectFile, type SerializableProject } from '../export/projectSerializer';
 import { readRecentProjects, rememberProject, type RecentProject } from '../project/recentProjects';
 import { useProjectStore } from '../state/projectStore';
+import { isDesktopRuntime, openProjectFileDialog, saveProjectFile } from '../export/nativeSave';
 
 interface WorkspaceLayout {
   left: number;
@@ -51,18 +52,12 @@ function currentProject(): SerializableProject {
   };
 }
 
-function downloadProject(file: ReturnType<typeof projectFile>, name: string) {
-  const blob = new Blob([JSON.stringify(file, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = `${name}.pixelrig.json`;
-  anchor.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
 function displayName(name: string) {
   return name.replace(/\.pixelrig\.json$/i, '').replace(/\.json$/i, '') || 'Untitled character';
+}
+
+function fileName(path: string) {
+  return path.split(/[\\/]/).pop() || path;
 }
 
 export function App() {
@@ -71,6 +66,7 @@ export function App() {
   const [showExport, setShowExport] = useState(false);
   const [showProjectStart, setShowProjectStart] = useState(true);
   const [canReturnToEditor, setCanReturnToEditor] = useState(false);
+  const [activeProjectPath, setActiveProjectPath] = useState<string | null>(null);
   const [workspaceLayout, setWorkspaceLayout] = useState<WorkspaceLayout>(restoredWorkspaceLayout);
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>(readRecentProjects);
   const projectInputRef = useRef<HTMLInputElement>(null);
@@ -130,17 +126,21 @@ export function App() {
     '--timeline-height': `${workspaceLayout.timeline}px`,
   } as CSSProperties;
 
-  const saveProject = () => {
+  const saveProject = async () => {
     const file = projectFile(currentProject());
-    downloadProject(file, projectName);
-    setRecentProjects(rememberProject(file, projectName));
+    const path = await saveProjectFile(`${projectName}.pixelrig.json`, JSON.stringify(file, null, 2), activeProjectPath);
+    if (path) {
+      setActiveProjectPath(isDesktopRuntime() ? path : null);
+      setRecentProjects(rememberProject(file, projectName, path));
+    }
   };
 
   const openRecent = (recent: RecentProject) => {
     try {
       const project = parseProjectFile(JSON.stringify(recent.project));
       loadProject(project, recent.name);
-      setRecentProjects(rememberProject(recent.project, recent.name));
+      setRecentProjects(rememberProject(recent.project, recent.name, recent.path));
+      setActiveProjectPath(recent.path && !recent.path.startsWith('Browser ') ? recent.path : null);
       setShowProjectStart(false);
       setCanReturnToEditor(false);
     } catch {
@@ -155,7 +155,8 @@ export function App() {
       const project = parseProjectFile(await file.text());
       const name = displayName(file.name);
       loadProject(project, name);
-      setRecentProjects(rememberProject(projectFile(project), name));
+      setRecentProjects(rememberProject(projectFile(project), name, file.webkitRelativePath || `Browser file: ${file.name}`));
+      setActiveProjectPath(null);
       setShowProjectStart(false);
       setCanReturnToEditor(false);
     } catch (error) {
@@ -163,14 +164,37 @@ export function App() {
     }
   };
 
+  const openNativeProject = async () => {
+    try {
+      const selected = await openProjectFileDialog();
+      if (!selected) return;
+      const project = parseProjectFile(selected.content);
+      const name = displayName(fileName(selected.path));
+      loadProject(project, name);
+      setRecentProjects(rememberProject(projectFile(project), name, selected.path));
+      setActiveProjectPath(selected.path);
+      setShowProjectStart(false);
+      setCanReturnToEditor(false);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'The project could not be opened.');
+    }
+  };
+
+  const requestOpenProject = () => {
+    if (isDesktopRuntime()) void openNativeProject();
+    else projectInputRef.current?.click();
+  };
+
   const startEmptyProject = () => {
     createEmptyProject();
+    setActiveProjectPath(null);
     setShowProjectStart(false);
     setCanReturnToEditor(false);
   };
 
   const startCharacterTemplate = () => {
     createCharacterTemplateProject();
+    setActiveProjectPath(null);
     setShowProjectStart(false);
     setCanReturnToEditor(false);
   };
@@ -179,10 +203,10 @@ export function App() {
     <>
       <input ref={projectInputRef} type="file" accept="application/json,.json,.pixelrig.json" hidden onChange={(event) => { void openProjectFile(event.target.files); event.currentTarget.value = ''; }} />
       {showProjectStart ? (
-        <ProjectStartScreen recentProjects={recentProjects} onOpenRecent={openRecent} onCreateEmpty={startEmptyProject} onCreateCharacter={startCharacterTemplate} onImport={() => projectInputRef.current?.click()} onReturnToEditor={canReturnToEditor ? () => setShowProjectStart(false) : undefined} />
+        <ProjectStartScreen recentProjects={recentProjects} onOpenRecent={openRecent} onCreateEmpty={startEmptyProject} onCreateCharacter={startCharacterTemplate} onImport={requestOpenProject} onReturnToEditor={canReturnToEditor ? () => setShowProjectStart(false) : undefined} />
       ) : (
         <div className="app-shell" style={workspaceStyle}>
-          <Toolbar onNewProject={() => { setCanReturnToEditor(true); setShowProjectStart(true); }} onOpenProject={() => projectInputRef.current?.click()} onSaveProject={saveProject} onOpenRecent={openRecent} onExport={() => setShowExport(true)} projectName={projectName} recentProjects={recentProjects} showGrid={showGrid} onToggleGrid={() => setShowGrid((value) => !value)} />
+          <Toolbar onNewProject={() => { setCanReturnToEditor(true); setShowProjectStart(true); }} onOpenProject={requestOpenProject} onSaveProject={saveProject} onOpenRecent={openRecent} onExport={() => setShowExport(true)} projectName={projectName} recentProjects={recentProjects} showGrid={showGrid} onToggleGrid={() => setShowGrid((value) => !value)} />
           <div className="app-layout">
             <aside className="left-rail">
               <NodeHierarchy />

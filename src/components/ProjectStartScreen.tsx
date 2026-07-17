@@ -37,7 +37,7 @@ export function ProjectStartScreen({ onCreateEmpty, onCreateCharacter, onImport,
                   {recentProjects.map((recent) => (
                     <button key={recent.id} type="button" className="recent-project-card" onClick={() => onOpenRecent(recent)}>
                       <span className="recent-project-icon"><Icon name="layers" size={17} /></span>
-                      <span><strong>{recent.name}</strong><small>{recentDate(recent.savedAt)}</small></span>
+                      <span><strong>{recent.name}</strong><small title={recent.path ?? 'Saved project snapshot'}>{recent.path ?? 'Saved project snapshot'}</small><small>{recentDate(recent.savedAt)}</small></span>
                       <Icon name="chevron" size={14} />
                     </button>
                   ))}

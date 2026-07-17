@@ -1,4 +1,12 @@
 .source-image-stage { position: relative; overflow: hidden; border: 1px solid #3e465d; border-radius: 5px; background-color: #282d38; background-image: linear-gradient(45deg, #20242d 25%, transparent 25%), linear-gradient(-45deg, #20242d 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #20242d 75%), linear-gradient(-45deg, transparent 75%, #20242d 75%); background-size: 10px 10px; background-position: 0 0, 0 5px, 5px -5px, -5px 0; }
 .source-image-stage > img { width: 100%; height: 100%; display: block; image-rendering: pixelated; }
 .source-slice-outline { position: absolute; box-sizing: border-box; border: 2px solid #ffc578; background: rgba(255, 197, 120, .12); pointer-events: none; }
+.source-slice-outline.editable { pointer-events: auto; cursor: move; touch-action: none; }
+.source-slice-resize-handle { position: absolute; right: -5px; bottom: -5px; width: 9px; height: 9px; border: 1px solid #fff0d1; border-radius: 2px; background: #ffae57; cursor: nwse-resize; }
+.source-slice-inputs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-top: 8px; }
+.source-slice-inputs label { display: grid; gap: 3px; color: #838ba2; font-size: 9px; }
+.source-slice-inputs input { width: 100%; height: 25px; padding: 3px 4px; border: 1px solid #424b65; border-radius: 3px; color: #dce1f5; background: #20242d; font: inherit; font-size: 10px; }
+.apply-slice-button { width: 100%; margin-top: 8px; padding: 6px; border: 1px solid #5967a5; border-radius: 4px; color: #e0e4ff; background: #303956; font-size: 10px; cursor: pointer; }
+.apply-slice-button:hover:not(:disabled) { border-color: #8593ec; background: #3b4670; }
+.apply-slice-button:disabled { opacity: .55; cursor: wait; }
 .source-image-caption { margin: 7px 0 0; color: #77819b; font-size: 9px; line-height: 1.4; }

@@ -20,8 +20,11 @@ function animationSnapshot(): SerializableProject {
 
 export function Timeline() {
   const animationInputRef = useRef<HTMLInputElement>(null);
+  const draggedFrameIndexRef = useRef<number | null>(null);
   const [ioStatus, setIoStatus] = useState('Playback starts from the selected frame');
   const [isSavingAnimation, setIsSavingAnimation] = useState(false);
+  const [draggedFrameIndex, setDraggedFrameIndex] = useState<number | null>(null);
+  const [dropFrameIndex, setDropFrameIndex] = useState<number | null>(null);
   const frames = useProjectStore((state) => state.frames);
   const currentFrameIndex = useProjectStore((state) => state.currentFrameIndex);
   const isPlaying = useProjectStore((state) => state.isPlaying);
@@ -37,6 +40,7 @@ export function Timeline() {
   const insertFrame = useProjectStore((state) => state.insertFrame);
   const duplicateFrame = useProjectStore((state) => state.duplicateFrame);
   const deleteFrame = useProjectStore((state) => state.deleteFrame);
+  const moveFrame = useProjectStore((state) => state.moveFrame);
   const applyAnimationTemplate = useProjectStore((state) => state.applyAnimationTemplate);
   const loadAnimation = useProjectStore((state) => state.loadAnimation);
   const projectName = useProjectStore((state) => state.projectName);
@@ -77,6 +81,18 @@ export function Timeline() {
     } finally {
       setIsSavingAnimation(false);
     }
+  };
+
+  const clearFrameDrag = () => {
+    draggedFrameIndexRef.current = null;
+    setDraggedFrameIndex(null);
+    setDropFrameIndex(null);
+  };
+
+  const dropFrame = (targetIndex: number) => {
+    const sourceIndex = draggedFrameIndexRef.current;
+    if (sourceIndex !== null && sourceIndex !== targetIndex) moveFrame(sourceIndex, targetIndex);
+    clearFrameDrag();
   };
 
   return (
@@ -120,8 +136,24 @@ export function Timeline() {
               <button
                 key={frame.id}
                 type="button"
-                className={`frame-cell ${index === currentFrameIndex ? 'selected' : ''}`}
+                draggable
+                className={`frame-cell ${index === currentFrameIndex ? 'selected' : ''} ${index === draggedFrameIndex ? 'dragging' : ''} ${index === dropFrameIndex && index !== draggedFrameIndex ? 'drop-target' : ''}`}
                 onClick={() => selectFrame(index)}
+                onDragStart={(event) => {
+                  draggedFrameIndexRef.current = index;
+                  setDraggedFrameIndex(index);
+                  event.dataTransfer.effectAllowed = 'move';
+                  event.dataTransfer.setData('text/plain', String(index));
+                }}
+                onDragEnd={clearFrameDrag}
+                onDragOver={(event) => {
+                  if (draggedFrameIndexRef.current === null || draggedFrameIndexRef.current === index) return;
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = 'move';
+                  setDropFrameIndex(index);
+                }}
+                onDragLeave={() => setDropFrameIndex((current) => current === index ? null : current)}
+                onDrop={(event) => { event.preventDefault(); dropFrame(index); }}
                 aria-label={`Frame ${index + 1}`}
                 aria-current={index === currentFrameIndex ? 'step' : undefined}
               >
@@ -130,7 +162,20 @@ export function Timeline() {
                 <span className="frame-tick" />
               </button>
             ))}
-            <button className="append-frame" type="button" onClick={insertFrame} title="Insert frame"><Icon name="plus" /></button>
+            <button
+              className={`append-frame ${dropFrameIndex === frames.length ? 'drop-target' : ''}`}
+              type="button"
+              onClick={insertFrame}
+              onDragOver={(event) => {
+                if (draggedFrameIndexRef.current === null) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = 'move';
+                setDropFrameIndex(frames.length);
+              }}
+              onDragLeave={() => setDropFrameIndex((current) => current === frames.length ? null : current)}
+              onDrop={(event) => { event.preventDefault(); dropFrame(frames.length - 1); }}
+              title="Insert frame"
+            ><Icon name="plus" /></button>
           </div>
         </div>
       </div>
