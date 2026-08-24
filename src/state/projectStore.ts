@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { AnimationFrame, AnimationTemplate, AssetId, NodeFrameState, NodeId, ProjectSettings, RigNode, RotationSnapAngle, SpriteAsset, TransformTool, Vec2 } from '../types/project';
+import { nodeSpriteIds, type AnimationFrame, type AnimationTemplate, type AssetId, type FrameGroup, type NodeFrameState, type NodeId, type ProjectSettings, type RigNode, type RotationSnapAngle, type SpriteAsset, type TransformTool, type TweenProperties, type Vec2 } from '../types/project';
 import type { AnimationDataFile, SerializableProject } from '../export/projectSerializer';
 import { normalizeProjectSettings } from '../export/projectSerializer';
 import { createDemoProject } from './sampleProject';
@@ -47,6 +47,7 @@ interface ProjectState {
   frames: AnimationFrame[];
   currentFrameIndex: number;
   isPlaying: boolean;
+  playbackGroupId: string | null;
   isLooping: boolean;
   onionSkinEnabled: boolean;
   fps: number;
@@ -68,7 +69,11 @@ interface ProjectState {
   deleteAsset: (id: AssetId) => void;
   createNodeForAsset: (assetId: AssetId) => void;
   setNodeAsset: (nodeId: NodeId, assetId: AssetId) => void;
+  addNodeSprites: (nodeId: NodeId, assetIds: AssetId[]) => void;
+  removeNodeSprite: (nodeId: NodeId, assetId: AssetId) => void;
+  setNodeFrameSprite: (nodeId: NodeId, imageIndex: number) => void;
   renameNode: (nodeId: NodeId, name: string) => void;
+  addRootNode: () => void;
   addChildNode: (parentId: NodeId) => void;
   reparentNode: (nodeId: NodeId, parentId: NodeId | null) => void;
   setNodeSortingOrder: (nodeId: NodeId, sortingOrder: number) => void;
@@ -84,6 +89,11 @@ interface ProjectState {
   duplicateFrame: () => void;
   deleteFrame: () => void;
   moveFrame: (fromIndex: number, toIndex: number) => void;
+  insertTweenFrames: (startIndex: number, endIndex: number, count: number, properties: TweenProperties) => void;
+  groupFrames: (frameIndexes: number[], name: string, color: string) => void;
+  renameFrameGroup: (groupId: string, name: string, color: string) => void;
+  ungroupFrames: (groupId: string) => void;
+  updateCanvasFrame: (canvasData: string | undefined) => void;
   applyAnimationTemplate: (template: AnimationTemplate) => void;
   loadAnimation: (animation: AnimationDataFile) => boolean;
   setActiveTool: (tool: TransformTool) => void;
@@ -117,6 +127,7 @@ function snapshotNode(node: RigNode): NodeFrameState {
     scale: { ...node.transform.scale },
     visible: node.visible,
     imageIndex: 0,
+    sortingOrder: node.sortingOrder ?? 0,
   };
 }
 
@@ -130,6 +141,8 @@ function createFrame(nodes: Record<NodeId, RigNode>): AnimationFrame {
 function cloneFrame(frame: AnimationFrame): AnimationFrame {
   return {
     id: `frame-${crypto.randomUUID()}`,
+    canvasData: frame.canvasData,
+    group: frame.group ? { ...frame.group } : undefined,
     nodeStates: Object.fromEntries(
       Object.entries(frame.nodeStates).map(([nodeId, state]) => [
         nodeId,
@@ -163,7 +176,8 @@ function stateMatches(left: NodeFrameState, right: NodeFrameState) {
     && left.scale.x === right.scale.x
     && left.scale.y === right.scale.y
     && left.visible === right.visible
-    && left.imageIndex === right.imageIndex;
+    && left.imageIndex === right.imageIndex
+    && left.sortingOrder === right.sortingOrder;
 }
 
 /**
@@ -215,6 +229,42 @@ function withFrameNodeState(frames: AnimationFrame[], frameIndex: number, nodeId
   return frames.map((frame, index) => index === frameIndex
     ? { ...frame, nodeStates: { ...frame.nodeStates, [nodeId]: cloneFrameState(nodeState) } }
     : frame);
+}
+
+function lerp(start: number, end: number, amount: number) {
+  return start + (end - start) * amount;
+}
+
+function lerpRotation(start: number, end: number, amount: number) {
+  const shortestDelta = ((end - start + 540) % 360) - 180;
+  return start + shortestDelta * amount;
+}
+
+function tweenNodeState(start: NodeFrameState, end: NodeFrameState, amount: number, properties: TweenProperties): NodeFrameState {
+  return {
+    position: properties.position ? { x: lerp(start.position.x, end.position.x, amount), y: lerp(start.position.y, end.position.y, amount) } : { ...start.position },
+    rotation: properties.rotation ? lerpRotation(start.rotation, end.rotation, amount) : start.rotation,
+    scale: properties.scale ? { x: lerp(start.scale.x, end.scale.x, amount), y: lerp(start.scale.y, end.scale.y, amount) } : { ...start.scale },
+    visible: properties.visible && amount >= 0.5 ? end.visible : start.visible,
+    imageIndex: properties.sprite && amount >= 0.5 ? end.imageIndex : start.imageIndex,
+    sortingOrder: start.sortingOrder,
+  };
+}
+
+function createEmptyNode(parentId: NodeId | null, name: string): RigNode {
+  return {
+    id: `node-${crypto.randomUUID()}`,
+    name,
+    parentId,
+    children: [],
+    assetIds: [],
+    assetId: null,
+    sortingOrder: 0,
+    pivot: { x: 0, y: 0 },
+    transform: { position: { x: 0, y: 0 }, rotation: 0, scale: { x: 1, y: 1 } },
+    visible: true,
+    locked: false,
+  };
 }
 
 interface TransformMatrix {
@@ -355,6 +405,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   frames: [createFrame(demo.nodes)],
   currentFrameIndex: 0,
   isPlaying: false,
+  playbackGroupId: null,
   isLooping: true,
   onionSkinEnabled: false,
   fps: 12,
@@ -406,7 +457,22 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const selectedAssetIds = state.selectedAssetIds.filter((assetId) => assetId !== id);
       return {
         assets,
-        nodes: Object.fromEntries(Object.entries(state.nodes).map(([nodeId, node]) => [nodeId, node.assetId === id ? { ...node, assetId: null } : node])) as Record<NodeId, RigNode>,
+        nodes: Object.fromEntries(Object.entries(state.nodes).map(([nodeId, node]) => {
+          const previousIds = nodeSpriteIds(node);
+          const removedIndex = previousIds.indexOf(id);
+          const assetIds = previousIds.filter((assetId) => assetId !== id);
+          return [nodeId, removedIndex >= 0 ? { ...node, assetIds, assetId: assetIds[0] ?? null } : node];
+        })) as Record<NodeId, RigNode>,
+        frames: state.frames.map((frame) => ({
+          ...frame,
+          nodeStates: Object.fromEntries(Object.entries(frame.nodeStates).map(([nodeId, nodeState]) => {
+            const previousIds = state.nodes[nodeId] ? nodeSpriteIds(state.nodes[nodeId]) : [];
+            const removedIndex = previousIds.indexOf(id);
+            if (removedIndex < 0) return [nodeId, nodeState];
+            const imageIndex = nodeState.imageIndex > removedIndex ? nodeState.imageIndex - 1 : Math.min(nodeState.imageIndex, Math.max(0, previousIds.length - 2));
+            return [nodeId, { ...nodeState, imageIndex }];
+          })),
+        })),
         selectedAssetIds,
         selectedAssetId: state.selectedAssetId === id
           ? selectedAssetIds[selectedAssetIds.length - 1] ?? null
@@ -423,6 +489,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       name: asset.name.replace(/\.png$/i, ''),
       parentId: null,
       children: [],
+      assetIds: [assetId],
       assetId,
       sortingOrder: 0,
       pivot: { x: Math.floor(asset.width / 2), y: Math.floor(asset.height / 2) },
@@ -442,20 +509,67 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       selectedAssetIds: [],
     }));
   },
-  setNodeAsset: (nodeId, assetId) =>
+  setNodeAsset: (nodeId, assetId) => {
+    const node = get().nodes[nodeId];
+    if (!node) return;
+    const existingIndex = nodeSpriteIds(node).indexOf(assetId);
+    if (existingIndex >= 0) get().setNodeFrameSprite(nodeId, existingIndex);
+    else get().addNodeSprites(nodeId, [assetId]);
+  },
+  addNodeSprites: (nodeId, assetIds) =>
     set((state) => {
       const node = state.nodes[nodeId];
-      const asset = state.assets[assetId];
-      if (!node || !asset) return {};
+      if (!node) return {};
+      const existing = nodeSpriteIds(node);
+      const validNewIds = assetIds.filter((assetId) => Boolean(state.assets[assetId]) && !existing.includes(assetId));
+      if (!validNewIds.length) return {};
+      const nextIds = [...existing, ...validNewIds];
+      const selectedIndex = nextIds.indexOf(validNewIds[validNewIds.length - 1]);
+      const firstAsset = !existing.length ? state.assets[validNewIds[0]] : null;
       return {
         nodes: {
           ...state.nodes,
           [nodeId]: {
             ...node,
-            assetId,
-            pivot: { x: Math.min(Math.max(0, node.pivot.x), asset.width), y: Math.min(Math.max(0, node.pivot.y), asset.height) },
+            assetIds: nextIds,
+            assetId: nextIds[0] ?? null,
+            pivot: firstAsset ? { x: Math.floor(firstAsset.width / 2), y: Math.floor(firstAsset.height / 2) } : node.pivot,
           },
         },
+        frames: state.frames.map((frame, index) => index === state.currentFrameIndex
+          ? { ...frame, nodeStates: { ...frame.nodeStates, [nodeId]: { ...(frame.nodeStates[nodeId] ?? snapshotNode(node)), imageIndex: selectedIndex } } }
+          : frame),
+      };
+    }),
+  removeNodeSprite: (nodeId, assetId) =>
+    set((state) => {
+      const node = state.nodes[nodeId];
+      if (!node) return {};
+      const previousIds = nodeSpriteIds(node);
+      const removedIndex = previousIds.indexOf(assetId);
+      if (removedIndex < 0) return {};
+      const assetIds = previousIds.filter((id) => id !== assetId);
+      return {
+        nodes: { ...state.nodes, [nodeId]: { ...node, assetIds, assetId: assetIds[0] ?? null } },
+        frames: state.frames.map((frame) => {
+          const nodeState = frame.nodeStates[nodeId] ?? snapshotNode(node);
+          const imageIndex = nodeState.imageIndex > removedIndex ? nodeState.imageIndex - 1 : Math.min(nodeState.imageIndex, Math.max(0, assetIds.length - 1));
+          return { ...frame, nodeStates: { ...frame.nodeStates, [nodeId]: { ...nodeState, imageIndex } } };
+        }),
+      };
+    }),
+  setNodeFrameSprite: (nodeId, imageIndex) =>
+    set((state) => {
+      const node = state.nodes[nodeId];
+      const frame = state.frames[state.currentFrameIndex];
+      if (!node || !frame) return {};
+      const maxIndex = Math.max(0, nodeSpriteIds(node).length - 1);
+      const nextIndex = Math.max(0, Math.min(maxIndex, Math.round(imageIndex)));
+      return {
+        frames: withFrameNodeState(state.frames, state.currentFrameIndex, nodeId, {
+          ...(frame.nodeStates[nodeId] ?? snapshotNode(node)),
+          imageIndex: nextIndex,
+        }),
       };
     }),
   renameNode: (nodeId, name) =>
@@ -464,27 +578,27 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       if (!node) return {};
       return { nodes: { ...state.nodes, [nodeId]: { ...node, name: name.trim() || 'Node' } } };
     }),
+  addRootNode: () =>
+    set((state) => {
+      const node = createEmptyNode(null, 'New Node');
+      return {
+        nodes: { ...state.nodes, [node.id]: node },
+        rootNodeIds: [...state.rootNodeIds, node.id],
+        frames: state.frames.map((frame) => ({ ...frame, nodeStates: { ...frame.nodeStates, [node.id]: snapshotNode(node) } })),
+        selectedNodeId: node.id,
+        selectedAssetId: null,
+        selectedAssetIds: [],
+      };
+    }),
   addChildNode: (parentId) =>
     set((state) => {
       const parent = state.nodes[parentId];
       if (!parent) return {};
-      const id = `node-${crypto.randomUUID()}`;
-      const child: RigNode = {
-        id,
-        name: 'New Child',
-        parentId,
-      children: [],
-      assetId: null,
-      sortingOrder: 0,
-      pivot: { x: 0, y: 0 },
-        transform: { position: { x: 0, y: 0 }, rotation: 0, scale: { x: 1, y: 1 } },
-        visible: true,
-        locked: false,
-      };
+      const child = createEmptyNode(parentId, 'New Child');
       return {
-        nodes: { ...state.nodes, [id]: child, [parentId]: { ...parent, children: [...parent.children, id] } },
-        frames: state.frames.map((frame) => ({ ...frame, nodeStates: { ...frame.nodeStates, [id]: snapshotNode(child) } })),
-        selectedNodeId: id,
+        nodes: { ...state.nodes, [child.id]: child, [parentId]: { ...parent, children: [...parent.children, child.id] } },
+        frames: state.frames.map((frame) => ({ ...frame, nodeStates: { ...frame.nodeStates, [child.id]: snapshotNode(child) } })),
+        selectedNodeId: child.id,
         selectedAssetId: null,
         selectedAssetIds: [],
       };
@@ -533,8 +647,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   setNodeSortingOrder: (nodeId, sortingOrder) =>
     set((state) => {
       const node = state.nodes[nodeId];
-      if (!node) return {};
-      return { nodes: { ...state.nodes, [nodeId]: { ...node, sortingOrder: Number.isFinite(sortingOrder) ? Math.round(sortingOrder) : 0 } } };
+      const frame = state.frames[state.currentFrameIndex];
+      if (!node || !frame) return {};
+      const nodeState = frame.nodeStates[nodeId] ?? snapshotNode(node);
+      return {
+        frames: withFrameNodeState(state.frames, state.currentFrameIndex, nodeId, {
+          ...nodeState,
+          sortingOrder: Number.isFinite(sortingOrder) ? Math.round(sortingOrder) : 0,
+        }),
+      };
     }),
   toggleNodeVisibility: (id) =>
     set((state) => ({
@@ -548,14 +669,30 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set((state) => ({
       currentFrameIndex: Math.min(Math.max(0, index), state.frames.length - 1),
       isPlaying: false,
+      playbackGroupId: null,
     })),
-  togglePlayback: () => set((state) => ({ isPlaying: !state.isPlaying })),
+  togglePlayback: () =>
+    set((state) => {
+      if (state.isPlaying) return { isPlaying: false, playbackGroupId: null };
+      return {
+        isPlaying: true,
+        playbackGroupId: state.frames[state.currentFrameIndex]?.group?.id ?? null,
+      };
+    }),
   advanceFrame: () =>
     set((state) => {
-      const isLastFrame = state.currentFrameIndex === state.frames.length - 1;
-      if (!isLastFrame) return { currentFrameIndex: state.currentFrameIndex + 1 };
-      if (state.isLooping) return { currentFrameIndex: 0 };
-      return { isPlaying: false };
+      const playbackIndexes = state.playbackGroupId
+        ? state.frames.flatMap((frame, index) => frame.group?.id === state.playbackGroupId ? [index] : [])
+        : state.frames.map((_, index) => index);
+      if (!playbackIndexes.length) return { isPlaying: false, playbackGroupId: null };
+
+      const playbackPosition = playbackIndexes.indexOf(state.currentFrameIndex);
+      if (playbackPosition < 0) return { currentFrameIndex: playbackIndexes[0] };
+      if (playbackPosition < playbackIndexes.length - 1) {
+        return { currentFrameIndex: playbackIndexes[playbackPosition + 1] };
+      }
+      if (state.isLooping) return { currentFrameIndex: playbackIndexes[0] };
+      return { isPlaying: false, playbackGroupId: null };
     }),
   toggleLooping: () => set((state) => ({ isLooping: !state.isLooping })),
   toggleOnionSkin: () => set((state) => ({ onionSkinEnabled: !state.onionSkinEnabled })),
@@ -592,6 +729,62 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       frames.splice(toIndex, 0, movedFrame);
       return { frames, currentFrameIndex: toIndex, isPlaying: false, transformSession: null };
     }),
+  insertTweenFrames: (firstIndex, secondIndex, requestedCount, properties) =>
+    set((state) => {
+      const startIndex = Math.min(firstIndex, secondIndex);
+      const endIndex = Math.max(firstIndex, secondIndex);
+      const startFrame = state.frames[startIndex];
+      const endFrame = state.frames[endIndex];
+      const count = Math.max(1, Math.min(120, Math.round(requestedCount)));
+      if (!startFrame || !endFrame || startIndex === endIndex || !Object.values(properties).some(Boolean)) return {};
+      const tweenFrames = Array.from({ length: count }, (_, index): AnimationFrame => {
+        const amount = (index + 1) / (count + 1);
+        return {
+          id: `frame-${crypto.randomUUID()}`,
+          nodeStates: Object.fromEntries(Object.values(state.nodes).map((node) => {
+            const start = startFrame.nodeStates[node.id] ?? snapshotNode(node);
+            const end = endFrame.nodeStates[node.id] ?? snapshotNode(node);
+            return [node.id, tweenNodeState(start, end, amount, properties)];
+          })),
+        };
+      });
+      const frames = [...state.frames];
+      frames.splice(startIndex + 1, 0, ...tweenFrames);
+      return { frames, currentFrameIndex: startIndex + 1, isPlaying: false, transformSession: null };
+    }),
+  groupFrames: (frameIndexes, name, color) =>
+    set((state) => {
+      const selected = new Set(frameIndexes.filter((index) => index >= 0 && index < state.frames.length));
+      if (!selected.size) return {};
+      const group: FrameGroup = {
+        id: `group-${crypto.randomUUID()}`,
+        name: name.trim() || 'Frame Group',
+        color,
+      };
+      return {
+        frames: state.frames.map((frame, index) => selected.has(index) ? { ...frame, group: { ...group } } : frame),
+        isPlaying: false,
+      };
+    }),
+  renameFrameGroup: (groupId, name, color) =>
+    set((state) => ({
+      frames: state.frames.map((frame) => frame.group?.id === groupId
+        ? { ...frame, group: { id: groupId, name: name.trim() || 'Frame Group', color } }
+        : frame),
+    })),
+  ungroupFrames: (groupId) =>
+    set((state) => ({
+      frames: state.frames.map((frame) => {
+        if (frame.group?.id !== groupId) return frame;
+        const { group: _, ...ungrouped } = frame;
+        return ungrouped;
+      }),
+    })),
+  updateCanvasFrame: (canvasData) =>
+    set((state) => ({
+      frames: state.frames.map((frame, index) => index === state.currentFrameIndex ? { ...frame, canvasData } : frame),
+      isPlaying: false,
+    })),
   applyAnimationTemplate: (template) =>
     set((state) => {
       const nextIndex = state.currentFrameIndex + 1;
@@ -610,6 +803,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (!matchedNodeIds.length) return false;
     const frames = animation.frames.map((frame) => ({
       id: `frame-${crypto.randomUUID()}`,
+      canvasData: frame.canvasData,
+      group: frame.group ? { ...frame.group } : undefined,
       nodeStates: Object.fromEntries(Object.values(state.nodes).map((node) => [
         node.id,
         cloneFrameState(frame.nodeStates[node.id] ?? snapshotNode(node)),
@@ -619,6 +814,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       frames,
       currentFrameIndex: 0,
       isPlaying: false,
+      playbackGroupId: null,
       isLooping: animation.loop,
       fps: animation.fps,
       transformSession: null,
@@ -686,7 +882,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const frame = state.frames[state.currentFrameIndex];
       if (!node || node.locked || !frame) return {};
       const before = frame.nodeStates[nodeId] ?? snapshotNode(node);
-      const after: NodeFrameState = { ...snapshotNode(node), visible: before.visible, imageIndex: before.imageIndex };
+      const after: NodeFrameState = { ...snapshotNode(node), visible: before.visible, imageIndex: before.imageIndex, sortingOrder: before.sortingOrder };
       if (stateMatches(before, after)) return {};
       const entry: TransformHistoryEntry = { nodeId, frameIndex: state.currentFrameIndex, before: cloneFrameState(before), after: cloneFrameState(after) };
       return {
@@ -776,7 +972,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const source = state.nodes[nodeId];
       if (!source) return {};
       const id = `node-${crypto.randomUUID()}`;
-      const copy: RigNode = { ...source, id, name: `${source.name} Copy`, children: [], transform: { ...source.transform, position: { ...source.transform.position }, scale: { ...source.transform.scale } }, pivot: { ...source.pivot } };
+      const copy: RigNode = { ...source, id, name: `${source.name} Copy`, children: [], assetIds: [...nodeSpriteIds(source)], transform: { ...source.transform, position: { ...source.transform.position }, scale: { ...source.transform.scale } }, pivot: { ...source.pivot } };
       const parent = source.parentId ? state.nodes[source.parentId] : null;
       const nodes = {
         ...state.nodes,
@@ -872,6 +1068,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       frames: [createFrame(nodes)],
       currentFrameIndex: 0,
       isPlaying: false,
+      playbackGroupId: null,
       isLooping: true,
       onionSkinEnabled: false,
       fps: 12,
@@ -894,6 +1091,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       frames: [createFrame(template.nodes)],
       currentFrameIndex: 0,
       isPlaying: false,
+      playbackGroupId: null,
       isLooping: true,
       onionSkinEnabled: false,
       fps: 12,
@@ -918,6 +1116,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       frames: project.frames.length ? project.frames : [createFrame(project.nodes)],
       currentFrameIndex: 0,
       isPlaying: false,
+      playbackGroupId: null,
       isLooping: project.isLooping,
       onionSkinEnabled: false,
       fps: project.fps,

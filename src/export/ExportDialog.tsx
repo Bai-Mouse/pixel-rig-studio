@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { useProjectStore } from '../state/projectStore';
-import { canvasToPngBlob, framePixels, renderAllFrames, type RenderableProject } from './animationRenderer';
+import { canvasToPngBlob, framePixels, renderAllFrames, type ExportLayerSource, type RenderableProject } from './animationRenderer';
 import { encodeApng } from './apngEncoder';
 import { encodeGif } from './gifEncoder';
 import { animationDataFile, projectFile, type SerializableProject } from './projectSerializer';
@@ -73,8 +73,8 @@ function minimumCellSize(frames: HTMLCanvasElement[]): CellSize {
   return { width, height };
 }
 
-async function createSpriteSheet(project: RenderableProject, layout: SpriteSheetLayout) {
-  const frames = await renderAllFrames(project);
+async function createSpriteSheet(project: RenderableProject, layout: SpriteSheetLayout, source: ExportLayerSource) {
+  const frames = await renderAllFrames(project, source);
   const columns = safeLayoutValue(layout.columns, 1, 99);
   const rows = safeLayoutValue(layout.rows, 1, 99);
   const gap = safeLayoutValue(layout.gap, 0, 256);
@@ -116,6 +116,7 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewSize, setPreviewSize] = useState<{ width: number; height: number } | null>(null);
   const [isPreviewing, setIsPreviewing] = useState(true);
+  const [layerSource, setLayerSource] = useState<ExportLayerSource>('nodes');
 
   const run = async (label: string, action: (project: SerializableProject) => Promise<ExportWriteResult>) => {
     setIsExporting(true);
@@ -144,7 +145,7 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
       return undefined;
     }
     setIsPreviewing(true);
-    void createSpriteSheet(project, layout).then(async ({ sheet, minimum }) => {
+    void createSpriteSheet(project, layout, layerSource).then(async ({ sheet, minimum }) => {
       const blob = await canvasToPngBlob(sheet);
       if (cancelled) return;
       urlToRelease = URL.createObjectURL(blob);
@@ -165,10 +166,10 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
       cancelled = true;
       if (urlToRelease) URL.revokeObjectURL(urlToRelease);
     };
-  }, [assets, columns, frameHeight, frameWidth, frames, gap, layoutIsValid, nodes, padding, rows, settings]);
+  }, [assets, columns, frameHeight, frameWidth, frames, gap, layerSource, layoutIsValid, nodes, padding, rows, settings]);
 
   const exportSheet = () => run('PNG sprite sheet', async (project: RenderableProject) => {
-    const { sheet } = await createSpriteSheet(project, layout);
+    const { sheet } = await createSpriteSheet(project, layout, layerSource);
     return saveExportFile({ blob: await canvasToPngBlob(sheet), name: 'untitled-character-sheet.png' }, { name: 'PNG image', extensions: ['png'] });
   });
 
@@ -178,6 +179,12 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
         <header><div><span className="export-mark"><Icon name="keyframe" /></span><div><strong>Export animation</strong><small>{frameCount} frame{frameCount === 1 ? '' : 's'} - {settings.canvasSize.x} x {settings.canvasSize.y} - {fps} FPS</small></div></div><button type="button" onClick={onClose}>Close</button></header>
         <div className="export-content">
           <p className="export-intro">All raster exports use the crisp pixel renderer without smoothing. PNG exports preserve transparency.</p>
+          <section className="export-layer-source" aria-label="Export layer source">
+            <div><strong>Export content</strong><small>Choose which workspace contributes pixels to every image and animation export.</small></div>
+            <button className={layerSource === 'nodes' ? 'active' : ''} type="button" onClick={() => setLayerSource('nodes')}><Icon name="layers" /><span><strong>Node layers</strong><small>Rigged sprites only</small></span></button>
+            <button className={layerSource === 'canvas' ? 'active' : ''} type="button" onClick={() => setLayerSource('canvas')}><Icon name="pixel" /><span><strong>Drawing canvas</strong><small>Frame drawings only</small></span></button>
+            <button className={layerSource === 'combined' ? 'active' : ''} type="button" onClick={() => setLayerSource('combined')}><Icon name="image" /><span><strong>Combined</strong><small>Drawing over node layers</small></span></button>
+          </section>
           <section className="sprite-sheet-export-options" aria-label="Sprite sheet layout">
             <div className="sprite-sheet-layout-controls">
               <div><strong>Sprite sheet layout</strong><small>Frame order fills left to right, then top to bottom. Minimum safe frame: {minimumFrameSize ? `${minimumFrameSize.width} × ${minimumFrameSize.height} px` : 'calculating...'}</small></div>
@@ -195,9 +202,9 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
           </section>
           <div className="export-grid">
             <button type="button" disabled={isExporting || !layoutIsValid} onClick={() => void exportSheet()}><Icon name="grid" /><strong>PNG sprite sheet</strong><span>Export the configured layout.</span></button>
-            <button type="button" disabled={isExporting} onClick={() => void run('individual PNG frames', async (project) => { const frames = await renderAllFrames(project); return saveExportFrames(await Promise.all(frames.map(async (frame, index) => ({ blob: await canvasToPngBlob(frame), name: `untitled-character-${String(index + 1).padStart(3, '0')}.png` })))); })}><Icon name="image" /><strong>Individual frames</strong><span>Choose a folder for all generated PNGs.</span></button>
-            <button type="button" disabled={isExporting} onClick={() => void run('GIF animation', async (project) => { const frames = await renderAllFrames(project); return saveExportFile({ blob: encodeGif(frames.map((frame) => ({ width: frame.width, height: frame.height, pixels: framePixels(frame) })), project.fps), name: 'untitled-character.gif' }, { name: 'GIF animation', extensions: ['gif'] }); })}><Icon name="play" /><strong>Animated GIF</strong><span>Looping 256-color GIF animation.</span></button>
-            <button type="button" disabled={isExporting} onClick={() => void run('animated PNG', async (project) => { const frames = await renderAllFrames(project); return saveExportFile({ blob: await encodeApng(frames.map((frame) => ({ width: frame.width, height: frame.height, pixels: framePixels(frame) })), project.fps), name: 'untitled-character.png' }, { name: 'Animated PNG', extensions: ['png'] }); })}><Icon name="layers" /><strong>Animated PNG</strong><span>RGBA animation with alpha support.</span></button>
+            <button type="button" disabled={isExporting} onClick={() => void run('individual PNG frames', async (project) => { const frames = await renderAllFrames(project, layerSource); return saveExportFrames(await Promise.all(frames.map(async (frame, index) => ({ blob: await canvasToPngBlob(frame), name: `untitled-character-${String(index + 1).padStart(3, '0')}.png` })))); })}><Icon name="image" /><strong>Individual frames</strong><span>Choose a folder for all generated PNGs.</span></button>
+            <button type="button" disabled={isExporting} onClick={() => void run('GIF animation', async (project) => { const frames = await renderAllFrames(project, layerSource); return saveExportFile({ blob: encodeGif(frames.map((frame) => ({ width: frame.width, height: frame.height, pixels: framePixels(frame) })), project.fps), name: 'untitled-character.gif' }, { name: 'GIF animation', extensions: ['gif'] }); })}><Icon name="play" /><strong>Animated GIF</strong><span>Looping 256-color GIF animation.</span></button>
+            <button type="button" disabled={isExporting} onClick={() => void run('animated PNG', async (project) => { const frames = await renderAllFrames(project, layerSource); return saveExportFile({ blob: await encodeApng(frames.map((frame) => ({ width: frame.width, height: frame.height, pixels: framePixels(frame) })), project.fps), name: 'untitled-character.png' }, { name: 'Animated PNG', extensions: ['png'] }); })}><Icon name="layers" /><strong>Animated PNG</strong><span>RGBA animation with alpha support.</span></button>
           </div>
           <div className="export-data-row">
             <button type="button" disabled={isExporting} onClick={() => void run('animation JSON', async (project) => saveExportFile({ blob: jsonBlob(animationDataFile(project)), name: 'untitled-character.animation.json' }, { name: 'JSON data', extensions: ['json'] }))}><Icon name="keyframe" /> JSON animation data</button>

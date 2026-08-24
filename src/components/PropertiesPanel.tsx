@@ -3,7 +3,7 @@ import '../source-preview.css';
 import { Icon } from './Icon';
 import { useProjectStore } from '../state/projectStore';
 import { cropAssetFromSource, filesToImportCandidates, replaceAssetsFromSource } from '../utils/importPng';
-import type { SpriteAsset, SpriteSlice } from '../types/project';
+import { nodeSpriteIds, type SpriteAsset, type SpriteSlice } from '../types/project';
 
 const Pair = ({ label, value }: { label: string; value: string }) => <div className="property-pair"><span>{label}</span><strong>{value}</strong></div>;
 
@@ -45,6 +45,9 @@ export function PropertiesPanel({ onEditAsset }: PropertiesPanelProps) {
   const resetNodeTransform = useProjectStore((state) => state.resetNodeTransform);
   const setNodeSortingOrder = useProjectStore((state) => state.setNodeSortingOrder);
   const setNodeAsset = useProjectStore((state) => state.setNodeAsset);
+  const addNodeSprites = useProjectStore((state) => state.addNodeSprites);
+  const removeNodeSprite = useProjectStore((state) => state.removeNodeSprite);
+  const setNodeFrameSprite = useProjectStore((state) => state.setNodeFrameSprite);
   const renameNode = useProjectStore((state) => state.renameNode);
   const createNodeForAsset = useProjectStore((state) => state.createNodeForAsset);
   const deleteAsset = useProjectStore((state) => state.deleteAsset);
@@ -58,12 +61,13 @@ export function PropertiesPanel({ onEditAsset }: PropertiesPanelProps) {
     && selectedAsset.slice.y === 0
     && selectedAsset.slice.width === selectedAsset.source.width
     && selectedAsset.slice.height === selectedAsset.source.height);
-  const nodeAsset = node?.assetId ? assetsById[node.assetId] : null;
   const [draftName, setDraftName] = useState('');
   const [assetMessage, setAssetMessage] = useState('');
   const [isReplacing, setIsReplacing] = useState(false);
   const [sliceDraft, setSliceDraft] = useState<SpriteSlice | null>(null);
   const [isUpdatingSlice, setIsUpdatingSlice] = useState(false);
+  const [isSpritePickerOpen, setIsSpritePickerOpen] = useState(false);
+  const [pendingSpriteIds, setPendingSpriteIds] = useState<string[]>([]);
   const frameState = node ? currentFrame?.nodeStates[node.id] : null;
   const transform = frameState ?? {
     position: node?.transform.position ?? { x: 0, y: 0 },
@@ -71,10 +75,16 @@ export function PropertiesPanel({ onEditAsset }: PropertiesPanelProps) {
     scale: node?.transform.scale ?? { x: 1, y: 1 },
     visible: node?.visible ?? true,
     imageIndex: 0,
+    sortingOrder: node?.sortingOrder ?? 0,
   };
+  const assignedSpriteIds = node ? nodeSpriteIds(node) : [];
+  const activeSpriteIndex = Math.max(0, Math.min(assignedSpriteIds.length - 1, transform.imageIndex));
+  const nodeAsset = assignedSpriteIds.length ? assetsById[assignedSpriteIds[activeSpriteIndex]] : null;
 
   useEffect(() => {
     setDraftName(node?.name ?? '');
+    setIsSpritePickerOpen(false);
+    setPendingSpriteIds([]);
   }, [node?.id, node?.name]);
 
   useEffect(() => {
@@ -223,21 +233,30 @@ export function PropertiesPanel({ onEditAsset }: PropertiesPanelProps) {
             <p className="node-edit-hint">Drag this node directly on the canvas to move it.</p>
           </div>
           <div className="property-group">
-            <h3>Sprite</h3>
-            <label className="node-asset-select">Image
-              <select value={node.assetId ?? ''} onChange={(event) => { if (event.target.value) setNodeAsset(node.id, event.target.value); }}>
-                <option value="" disabled>No image selected</option>
-                {allAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.folder ? `${asset.folder} / ` : ''}{asset.name}</option>)}
-              </select>
-            </label>
+            <h3>Sprites <span>{assignedSpriteIds.length} assigned</span></h3>
+            <div className="node-sprite-list">
+              {assignedSpriteIds.map((assetId, index) => {
+                const asset = assetsById[assetId];
+                if (!asset) return null;
+                return <div key={assetId} className={`node-sprite-item ${index === activeSpriteIndex ? 'active' : ''}`}>
+                  <button type="button" className="node-sprite-choice" onClick={() => setNodeFrameSprite(node.id, index)} title={`Use on frame ${currentFrameIndex + 1}`}>
+                    <span className="checkerboard"><img src={asset.src} alt="" /></span>
+                    <span><strong>{asset.name}</strong><small>{index === activeSpriteIndex ? `Used on frame ${currentFrameIndex + 1}` : asset.folder || 'Unsorted'}</small></span>
+                  </button>
+                  <button type="button" className="node-sprite-remove" onClick={() => removeNodeSprite(node.id, assetId)} title="Remove sprite from node"><Icon name="trash" size={12} /></button>
+                </div>;
+              })}
+              {!assignedSpriteIds.length && <p className="node-edit-hint">This node is empty. Add one or more sprites below.</p>}
+            </div>
+            <button className="node-add-sprites" type="button" onClick={() => { setPendingSpriteIds([]); setIsSpritePickerOpen(true); }}><Icon name="plus" size={13} /> Add sprites</button>
             {nodeAsset && <div className="node-texture-preview"><span className="checkerboard"><img src={nodeAsset.src} alt="" /></span><div><strong>{nodeAsset.name}</strong><small>{nodeAsset.folder || 'Unsorted'}</small></div></div>}
             <Pair label="Size" value={nodeAsset ? `${nodeAsset.width} x ${nodeAsset.height} px` : '—'} />
-            <p className="node-edit-hint">Choose any imported image to assign it directly to this node.</p>
+            <p className="node-edit-hint">Click a sprite to use it on only the current animation frame.</p>
           </div>
           <div className="property-group node-edit-group">
-            <h3>Sorting order</h3>
-            <label className="node-name-input">Layer order<input type="number" step="1" value={node.sortingOrder ?? 0} onChange={(event) => setNodeSortingOrder(node.id, Number(event.target.value))} /></label>
-            <p className="node-edit-hint">Higher values draw in front of lower values.</p>
+            <h3>Sorting order <span>Frame {currentFrameIndex + 1}</span></h3>
+            <label className="node-name-input">Layer order<input type="number" step="1" value={transform.sortingOrder} onChange={(event) => setNodeSortingOrder(node.id, Number(event.target.value))} /></label>
+            <p className="node-edit-hint">Higher values draw in front. This value belongs only to the current frame.</p>
           </div>
           <div className="property-group">
             <h3>Pivot</h3>
@@ -262,6 +281,21 @@ export function PropertiesPanel({ onEditAsset }: PropertiesPanelProps) {
       ) : (
         <div className="empty-properties"><Icon name="cursor" size={25} /><strong>Select a node or sprite</strong><span>Its properties will appear here.</span></div>
       )}
+      {node && isSpritePickerOpen && <div className="node-sprite-picker-backdrop" onPointerDown={(event) => { if (event.target === event.currentTarget) setIsSpritePickerOpen(false); }}>
+        <div className="node-sprite-picker" role="dialog" aria-modal="true" aria-label="Add sprites to node">
+          <header><div><strong>Add sprites</strong><small>{node.name}</small></div><button type="button" onClick={() => setIsSpritePickerOpen(false)}>Close</button></header>
+          <div className="node-sprite-picker-grid">
+            {allAssets.filter((asset) => !assignedSpriteIds.includes(asset.id)).map((asset) => {
+              const selected = pendingSpriteIds.includes(asset.id);
+              return <button key={asset.id} type="button" className={selected ? 'selected' : ''} onClick={() => setPendingSpriteIds((current) => current.includes(asset.id) ? current.filter((id) => id !== asset.id) : [...current, asset.id])}>
+                <span className="checkerboard"><img src={asset.src} alt="" /></span><strong>{asset.name}</strong><small>{asset.folder || 'Unsorted'}</small>
+              </button>;
+            })}
+            {!allAssets.some((asset) => !assignedSpriteIds.includes(asset.id)) && <p className="node-edit-hint">Every imported sprite is already assigned to this node.</p>}
+          </div>
+          <footer><span>{pendingSpriteIds.length} selected</span><button type="button" disabled={!pendingSpriteIds.length} onClick={() => { addNodeSprites(node.id, pendingSpriteIds); setPendingSpriteIds([]); setIsSpritePickerOpen(false); }}>Add selected</button></footer>
+        </div>
+      </div>}
     </aside>
   );
 }

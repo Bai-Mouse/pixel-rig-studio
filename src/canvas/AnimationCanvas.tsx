@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { useProjectStore } from '../state/projectStore';
-import type { AnimationFrame, NodeFrameState, RigNode, SpriteAsset, TransformTool, Vec2 } from '../types/project';
+import { nodeSpriteIdForFrame, type AnimationFrame, type NodeFrameState, type RigNode, type SpriteAsset, type TransformTool, type Vec2 } from '../types/project';
 import { DEFAULT_PIXEL_ALPHA_THRESHOLD, snapToGrid } from './pixelRotation';
 import { spriteRasterCache } from './spriteRasterCache';
 
 const imageCache = new Map<string, HTMLImageElement>();
+let drawingPreview: { source: string; image: HTMLImageElement } | null = null;
 
 interface Matrix {
   a: number;
@@ -37,6 +38,7 @@ function frameStateFor(node: RigNode, frame: AnimationFrame): NodeFrameState {
     scale: node.transform.scale,
     visible: node.visible,
     imageIndex: 0,
+    sortingOrder: node.sortingOrder ?? 0,
   };
 }
 
@@ -130,6 +132,15 @@ function getImage(src: string, onReady: () => void) {
   return image;
 }
 
+function getDrawingPreview(source: string, onReady: () => void) {
+  if (drawingPreview?.source === source) return drawingPreview.image;
+  const image = new Image();
+  image.onload = onReady;
+  image.src = source;
+  drawingPreview = { source, image };
+  return image;
+}
+
 function drawGrid(context: CanvasRenderingContext2D, width: number, height: number, originX: number, originY: number, zoom: number, size: number) {
   const left = -originX / zoom;
   const right = (width - originX) / zoom;
@@ -220,7 +231,8 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
       const nodeState = frameStateFor(node, frame);
       if (!node.visible || !nodeState.visible) return;
       const worldMatrix = getWorldMatrix(nodes, frame, node.id, matrixCache);
-      const asset: SpriteAsset | undefined = node.assetId ? assets[node.assetId] : undefined;
+      const assetId = nodeSpriteIdForFrame(node, nodeState);
+      const asset: SpriteAsset | undefined = assetId ? assets[assetId] : undefined;
       if (asset) {
         const image = getImage(asset.src, render);
         if (image.complete && image.naturalWidth) {
@@ -317,7 +329,11 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
       context.globalAlpha = opacity;
       const matrixCache = new Map<string, Matrix>();
       orderedNodes(nodes, roots)
-        .sort((leftId, rightId) => (nodes[leftId]?.sortingOrder ?? 0) - (nodes[rightId]?.sortingOrder ?? 0))
+        .sort((leftId, rightId) => {
+          const leftNode = nodes[leftId];
+          const rightNode = nodes[rightId];
+          return (leftNode ? frameStateFor(leftNode, frame).sortingOrder : 0) - (rightNode ? frameStateFor(rightNode, frame).sortingOrder : 0);
+        })
         .forEach((id) => {
         const node = nodes[id];
         if (node) drawNode(node, frame, showSelection, matrixCache);
@@ -329,6 +345,16 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
       drawFrame(frames[currentFrameIndex + 1], 0.11, false);
     }
     drawFrame(frames[currentFrameIndex], 1, true);
+    const canvasData = frames[currentFrameIndex]?.canvasData;
+    if (canvasData) {
+      const drawing = getDrawingPreview(canvasData, render);
+      if (drawing.complete && drawing.naturalWidth) {
+        context.save();
+        context.imageSmoothingEnabled = false;
+        context.drawImage(drawing, -settings.canvasSize.x / 2, -settings.canvasSize.y / 2, settings.canvasSize.x, settings.canvasSize.y);
+        context.restore();
+      }
+    }
     context.restore();
   }, [activeTool, assets, currentFrameIndex, frames, nodes, onionSkinEnabled, pan.x, pan.y, roots, selectedNodeId, settings, showGrid, showPivot, zoom]);
 
@@ -379,10 +405,14 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
 
   const hitTest = (worldPoint: Vec2, frame: AnimationFrame): string | null => {
     const cache = new Map<string, Matrix>();
-    const nodeIds = orderedNodes(nodes, roots).reverse();
+    const nodeIds = orderedNodes(nodes, roots)
+      .sort((leftId, rightId) => frameStateFor(nodes[leftId], frame).sortingOrder - frameStateFor(nodes[rightId], frame).sortingOrder)
+      .reverse();
     for (const id of nodeIds) {
       const node = nodes[id];
-      const asset = node?.assetId ? assets[node.assetId] : undefined;
+      const nodeState = node ? frameStateFor(node, frame) : null;
+      const assetId = node && nodeState ? nodeSpriteIdForFrame(node, nodeState) : null;
+      const asset = assetId ? assets[assetId] : undefined;
       if (!node || !asset || !node.visible || !frameStateFor(node, frame).visible) continue;
       const local = inverseTransformPoint(getWorldMatrix(nodes, frame, id, cache), worldPoint);
       if (local && local.x >= -node.pivot.x && local.x <= asset.width - node.pivot.x && local.y >= -node.pivot.y && local.y <= asset.height - node.pivot.y) return id;
@@ -433,7 +463,8 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
           const startLocal = inverseTransformPoint(nodeMatrix, worldPoint);
           if (activeTool === 'pivot' && !startLocal) return;
           if (activeTool === 'pivot' && startLocal) {
-            const asset = node.assetId ? assets[node.assetId] : undefined;
+            const assetId = nodeSpriteIdForFrame(node, startState);
+            const asset = assetId ? assets[assetId] : undefined;
             if (!asset) return;
             updateNodePivot(node.id, {
               x: Math.min(asset.width, Math.max(0, Math.round(node.pivot.x + startLocal.x))),
@@ -472,7 +503,8 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
           }
           if (drag.tool === 'rotate') {
             const angle = Math.atan2(worldPoint.y - drag.center.y, worldPoint.x - drag.center.x);
-            const degrees = drag.startState.rotation + (angle - drag.startAngle) * 180 / Math.PI;
+            const flipDirection = drag.startState.scale.x < 0 ? -1 : 1;
+            const degrees = drag.startState.rotation + (angle - drag.startAngle) * 180 / Math.PI * flipDirection;
             updateNodeFrame(drag.nodeId, { rotation: degrees });
           }
           if (drag.tool === 'scale') {

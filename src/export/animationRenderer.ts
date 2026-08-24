@@ -1,4 +1,4 @@
-import type { AnimationFrame, NodeFrameState, NodeId, ProjectSettings, RigNode, SpriteAsset } from '../types/project';
+import { nodeSpriteIdForFrame, type AnimationFrame, type NodeFrameState, type NodeId, type ProjectSettings, type RigNode, type SpriteAsset } from '../types/project';
 import { DEFAULT_PIXEL_ALPHA_THRESHOLD, snapToGrid } from '../canvas/pixelRotation';
 import { spriteRasterCache } from '../canvas/spriteRasterCache';
 
@@ -28,6 +28,7 @@ function stateFor(node: RigNode, frame: AnimationFrame): NodeFrameState {
     scale: node.transform.scale,
     visible: node.visible,
     imageIndex: 0,
+    sortingOrder: node.sortingOrder ?? 0,
   };
 }
 
@@ -55,6 +56,8 @@ function multiplyMatrices(parent: Matrix, child: Matrix): Matrix {
     f: parent.b * child.e + parent.d * child.f + parent.f,
   };
 }
+
+export type ExportLayerSource = 'nodes' | 'canvas' | 'combined';
 
 function getWorldMatrix(nodes: Record<NodeId, RigNode>, frame: AnimationFrame, nodeId: NodeId, cache: Map<NodeId, Matrix>): Matrix {
   const cached = cache.get(nodeId);
@@ -107,7 +110,8 @@ function renderFrameWithImages(project: RenderableProject, frameIndex: number, i
   const drawNode = (node: RigNode, worldMatrix: Matrix) => {
     const nodeState = stateFor(node, frame);
     if (!node.visible || !nodeState.visible) return;
-    const asset = node.assetId ? project.assets[node.assetId] : null;
+    const assetId = nodeSpriteIdForFrame(node, nodeState);
+    const asset = assetId ? project.assets[assetId] : null;
     const image = asset ? images.get(asset.id) : null;
     if (asset && image) {
       const anchorX = snapToGrid(worldMatrix.e, project.settings.pixelGridSize);
@@ -149,7 +153,11 @@ function renderFrameWithImages(project: RenderableProject, frameIndex: number, i
 
   const matrixCache = new Map<NodeId, Matrix>();
   orderedNodeIds(project.nodes, project.rootNodeIds)
-    .sort((leftId, rightId) => (project.nodes[leftId]?.sortingOrder ?? 0) - (project.nodes[rightId]?.sortingOrder ?? 0))
+    .sort((leftId, rightId) => {
+      const leftNode = project.nodes[leftId];
+      const rightNode = project.nodes[rightId];
+      return (leftNode ? stateFor(leftNode, frame).sortingOrder : 0) - (rightNode ? stateFor(rightNode, frame).sortingOrder : 0);
+    })
     .forEach((id) => {
       const node = project.nodes[id];
       if (node) drawNode(node, getWorldMatrix(project.nodes, frame, id, matrixCache));
@@ -161,9 +169,33 @@ export async function renderAnimationFrame(project: RenderableProject, frameInde
   return renderFrameWithImages(project, frameIndex, await loadAssets(project.assets));
 }
 
-export async function renderAllFrames(project: RenderableProject) {
+async function renderDrawingFrame(project: RenderableProject, frameIndex: number): Promise<HTMLCanvasElement> {
+  const frame = project.frames[frameIndex];
+  if (!frame) throw new Error('The selected animation frame does not exist.');
+  const canvas = document.createElement('canvas');
+  canvas.width = project.settings.canvasSize.x;
+  canvas.height = project.settings.canvasSize.y;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Your browser cannot create an export canvas.');
+  context.imageSmoothingEnabled = false;
+  if (frame.canvasData) context.drawImage(await loadImage(frame.canvasData), 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+export async function renderAllFrames(project: RenderableProject, source: ExportLayerSource = 'nodes') {
+  if (source === 'canvas') return Promise.all(project.frames.map((_, index) => renderDrawingFrame(project, index)));
   const images = await loadAssets(project.assets);
-  return project.frames.map((_, index) => renderFrameWithImages(project, index, images));
+  const nodeFrames = project.frames.map((_, index) => renderFrameWithImages(project, index, images));
+  if (source === 'nodes') return nodeFrames;
+  const drawingFrames = await Promise.all(project.frames.map((_, index) => renderDrawingFrame(project, index)));
+  return nodeFrames.map((nodeFrame, index) => {
+    const context = nodeFrame.getContext('2d');
+    if (context) {
+      context.imageSmoothingEnabled = false;
+      context.drawImage(drawingFrames[index], 0, 0);
+    }
+    return nodeFrame;
+  });
 }
 
 export async function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {

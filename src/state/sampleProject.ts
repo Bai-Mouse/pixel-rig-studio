@@ -36,6 +36,7 @@ const node = (
   name,
   parentId,
   children,
+  assetIds: [assetId],
   assetId,
   sortingOrder: 0,
   pivot: { x: 16, y: 16 },

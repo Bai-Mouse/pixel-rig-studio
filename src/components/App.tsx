@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
 import { AnimationCanvas } from '../canvas/AnimationCanvas';
+import { FrameDrawingCanvas } from '../canvas/FrameDrawingCanvas';
 import { NodeHierarchy } from '../hierarchy/NodeHierarchy';
 import { AssetLibrary } from './AssetLibrary';
 import { PropertiesPanel } from './PropertiesPanel';
@@ -64,6 +65,7 @@ export function App() {
   const [showGrid, setShowGrid] = useState(true);
   const [editingAssetId, setEditingAssetId] = useState<string | null>(null);
   const [showExport, setShowExport] = useState(false);
+  const [workspaceMode, setWorkspaceMode] = useState<'nodes' | 'canvas'>('nodes');
   const [showProjectStart, setShowProjectStart] = useState(true);
   const [canReturnToEditor, setCanReturnToEditor] = useState(false);
   const [activeProjectPath, setActiveProjectPath] = useState<string | null>(null);
@@ -206,8 +208,8 @@ export function App() {
         <ProjectStartScreen recentProjects={recentProjects} onOpenRecent={openRecent} onCreateEmpty={startEmptyProject} onCreateCharacter={startCharacterTemplate} onImport={requestOpenProject} onReturnToEditor={canReturnToEditor ? () => setShowProjectStart(false) : undefined} />
       ) : (
         <div className="app-shell" style={workspaceStyle}>
-          <Toolbar onNewProject={() => { setCanReturnToEditor(true); setShowProjectStart(true); }} onOpenProject={requestOpenProject} onSaveProject={saveProject} onOpenRecent={openRecent} onExport={() => setShowExport(true)} projectName={projectName} recentProjects={recentProjects} showGrid={showGrid} onToggleGrid={() => setShowGrid((value) => !value)} />
-          <div className="app-layout">
+          <Toolbar onNewProject={() => { setCanReturnToEditor(true); setShowProjectStart(true); }} onOpenProject={requestOpenProject} onSaveProject={saveProject} onOpenRecent={openRecent} onExport={() => setShowExport(true)} projectName={projectName} recentProjects={recentProjects} showGrid={showGrid} onToggleGrid={() => setShowGrid((value) => !value)} workspaceMode={workspaceMode} onWorkspaceModeChange={setWorkspaceMode} />
+          {workspaceMode === 'nodes' ? <div className="app-layout">
             <aside className="left-rail">
               <NodeHierarchy />
               <AssetLibrary />
@@ -216,7 +218,7 @@ export function App() {
             <AnimationCanvas showGrid={showGrid} />
             <div className="layout-resizer vertical" title="Drag to resize the right panel. Double-click to reset." {...resizeHandlers('right')} />
             <PropertiesPanel onEditAsset={setEditingAssetId} />
-          </div>
+          </div> : <div className="app-layout canvas-drawing-mode"><FrameDrawingCanvas /></div>}
           <div className="layout-resizer horizontal" title="Drag to resize the timeline. Double-click to reset." {...resizeHandlers('timeline')} />
           <Timeline />
           <footer className="status-bar"><span><i /> Ready</span><span>Pixel-perfect preview</span><span>Project workflow & desktop build ready</span></footer>

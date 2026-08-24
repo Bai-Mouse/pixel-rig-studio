@@ -1,4 +1,4 @@
-import { useState, type DragEvent, type MouseEvent } from 'react';
+import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { Icon } from '../components/Icon';
 import { useProjectStore } from '../state/projectStore';
 import type { NodeId } from '../types/project';
@@ -9,15 +9,15 @@ type NodeRowProps = {
   depth: number;
   draggedNodeId: NodeId | null;
   dropTargetId: NodeId | null;
-  onDragStart: (event: DragEvent<HTMLElement>, nodeId: NodeId) => void;
+  onDragStart: (nodeId: NodeId) => void;
   onDragEnd: () => void;
-  onDragOver: (event: DragEvent<HTMLDivElement>, nodeId: NodeId) => void;
-  onDrop: (event: DragEvent<HTMLDivElement>, nodeId: NodeId) => void;
+  onDragTarget: (nodeId: NodeId) => void;
+  onDrop: (nodeId: NodeId) => void;
   onContextMenu: (event: MouseEvent<HTMLDivElement>, nodeId: NodeId) => void;
   onSelect: (nodeId: NodeId) => void;
 };
 
-function NodeRow({ id, depth, draggedNodeId, dropTargetId, onDragStart, onDragEnd, onDragOver, onDrop, onContextMenu, onSelect }: NodeRowProps) {
+function NodeRow({ id, depth, draggedNodeId, dropTargetId, onDragStart, onDragEnd, onDragTarget, onDrop, onContextMenu, onSelect }: NodeRowProps) {
   const node = useProjectStore((state) => state.nodes[id]);
   const selectedNodeId = useProjectStore((state) => state.selectedNodeId);
   const toggleVisibility = useProjectStore((state) => state.toggleNodeVisibility);
@@ -31,10 +31,12 @@ function NodeRow({ id, depth, draggedNodeId, dropTargetId, onDragStart, onDragEn
     <>
       <div
         className={`node-row ${selectedNodeId === id ? 'selected' : ''} ${draggedNodeId === id ? 'dragging' : ''} ${dropTargetId === id ? 'drop-target' : ''}`}
+        data-node-id={id}
         style={{ paddingLeft: 10 + depth * 16 }}
-        onDragOver={(event) => onDragOver(event, id)}
-        onDragEnter={(event) => onDragOver(event, id)}
-        onDrop={(event) => onDrop(event, id)}
+        onPointerEnter={() => onDragTarget(id)}
+        onPointerUp={() => onDrop(id)}
+        onMouseEnter={() => onDragTarget(id)}
+        onMouseUp={() => onDrop(id)}
         onContextMenu={(event) => onContextMenu(event, id)}
       >
         <button
@@ -47,10 +49,9 @@ function NodeRow({ id, depth, draggedNodeId, dropTargetId, onDragStart, onDragEn
         <button
           className="node-main"
           type="button"
-          draggable
           onClick={() => onSelect(id)}
-          onDragStart={(event) => onDragStart(event, id)}
-          onDragEnd={onDragEnd}
+          onPointerDown={(event) => { if (event.button === 0) onDragStart(id); }}
+          onMouseDown={(event) => { if (event.button === 0) onDragStart(id); }}
           title="Drag this node onto another node to make it a child"
         >
           <span className="node-swatch" />
@@ -62,7 +63,7 @@ function NodeRow({ id, depth, draggedNodeId, dropTargetId, onDragStart, onDragEn
           <button type="button" className="delete-node-action" title="Delete node" onClick={() => { if (window.confirm(`Delete ${node.name} and all child nodes?`)) deleteNode(id); }}><Icon name="trash" size={14} /></button>
         </span>
       </div>
-      {isExpanded && node.children.map((child) => <NodeRow key={child} id={child} depth={depth + 1} draggedNodeId={draggedNodeId} dropTargetId={dropTargetId} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragOver={onDragOver} onDrop={onDrop} onContextMenu={onContextMenu} onSelect={onSelect} />)}
+      {isExpanded && node.children.map((child) => <NodeRow key={child} id={child} depth={depth + 1} draggedNodeId={draggedNodeId} dropTargetId={dropTargetId} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragTarget={onDragTarget} onDrop={onDrop} onContextMenu={onContextMenu} onSelect={onSelect} />)}
     </>
   );
 }
@@ -71,61 +72,89 @@ export function NodeHierarchy() {
   const rootNodeIds = useProjectStore((state) => state.rootNodeIds);
   const selectNode = useProjectStore((state) => state.selectNode);
   const reparentNode = useProjectStore((state) => state.reparentNode);
+  const addRootNode = useProjectStore((state) => state.addRootNode);
   const addChildNode = useProjectStore((state) => state.addChildNode);
+  const pointerDragRef = useRef<NodeId | null>(null);
   const [draggedNodeId, setDraggedNodeId] = useState<NodeId | null>(null);
   const [dropTargetId, setDropTargetId] = useState<NodeId | null>(null);
-  const [contextMenu, setContextMenu] = useState<{ nodeId: NodeId; x: number; y: number } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ nodeId: NodeId | null; x: number; y: number } | null>(null);
 
   const clearDrag = () => {
+    pointerDragRef.current = null;
     setDraggedNodeId(null);
     setDropTargetId(null);
   };
 
-  const handleDragStart = (event: DragEvent<HTMLElement>, nodeId: NodeId) => {
-    event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('text/plain', nodeId);
+  const handleDragStart = (nodeId: NodeId) => {
+    pointerDragRef.current = nodeId;
     setDraggedNodeId(nodeId);
     setContextMenu(null);
   };
 
-  const handleNodeDragOver = (event: DragEvent<HTMLDivElement>, nodeId: NodeId) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (draggedNodeId && draggedNodeId !== nodeId) {
-      event.dataTransfer.dropEffect = 'move';
+  const handleNodeDragTarget = (nodeId: NodeId) => {
+    if (pointerDragRef.current && pointerDragRef.current !== nodeId) {
       setDropTargetId(nodeId);
     }
   };
 
-  const handleNodeDrop = (event: DragEvent<HTMLDivElement>, parentId: NodeId) => {
-    event.preventDefault();
-    event.stopPropagation();
-    const nodeId = draggedNodeId ?? event.dataTransfer.getData('text/plain');
+  const handleNodeDrop = (parentId: NodeId) => {
+    const nodeId = pointerDragRef.current;
     if (nodeId && nodeId !== parentId) reparentNode(nodeId, parentId);
     clearDrag();
   };
 
-  const handleRootDrop = (event: DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    const nodeId = draggedNodeId ?? event.dataTransfer.getData('text/plain');
+  const nodeIdAtEventTarget = (target: EventTarget | null) => {
+    const element = target instanceof HTMLElement ? target.closest<HTMLElement>('[data-node-id]') : null;
+    return element?.dataset.nodeId as NodeId | undefined;
+  };
+
+  const trackPointerTarget = (target: EventTarget | null) => {
+    if (!pointerDragRef.current) return;
+    const targetNodeId = nodeIdAtEventTarget(target);
+    setDropTargetId(targetNodeId && targetNodeId !== pointerDragRef.current ? targetNodeId : null);
+  };
+
+  const dropAtPointerTarget = (target: EventTarget | null) => {
+    const targetNodeId = nodeIdAtEventTarget(target);
+    if (targetNodeId) handleNodeDrop(targetNodeId);
+    else handleRootDrop();
+  };
+
+  const handleRootDrop = () => {
+    const nodeId = pointerDragRef.current;
     if (nodeId) reparentNode(nodeId, null);
     clearDrag();
   };
 
+  useEffect(() => {
+    window.addEventListener('pointerup', clearDrag);
+    return () => window.removeEventListener('pointerup', clearDrag);
+  }, []);
+
   return (
-    <section className="panel hierarchy-panel" onClick={() => setContextMenu(null)}>
+    <section
+      className="panel hierarchy-panel"
+      onClick={() => setContextMenu(null)}
+      onContextMenu={(event) => {
+        if (event.target instanceof Element && event.target.closest('[data-node-id], .hierarchy-context-menu')) return;
+        event.preventDefault();
+        setContextMenu({ nodeId: null, x: event.clientX, y: event.clientY });
+      }}
+    >
       <div className="panel-heading">
         <span><Icon name="layers" /> Node hierarchy</span>
         <span className="subtle-count">{rootNodeIds.length} root</span>
       </div>
-      <div className={`tree-root ${draggedNodeId && !dropTargetId ? 'root-drop-target' : ''}`} onDragOver={(event) => { event.preventDefault(); setDropTargetId(null); }} onDrop={handleRootDrop}>
-        {rootNodeIds.map((id) => <NodeRow key={id} id={id} depth={0} draggedNodeId={draggedNodeId} dropTargetId={dropTargetId} onDragStart={handleDragStart} onDragEnd={clearDrag} onDragOver={handleNodeDragOver} onDrop={handleNodeDrop} onContextMenu={(event, nodeId) => { event.preventDefault(); setContextMenu({ nodeId, x: event.clientX, y: event.clientY }); }} onSelect={(nodeId) => { setContextMenu(null); selectNode(nodeId); }} />)}
-        <div className="root-drop-zone">Drag here to place at root level</div>
+      <div className={`tree-root ${draggedNodeId && !dropTargetId ? 'root-drop-target' : ''}`} onPointerMove={(event) => trackPointerTarget(event.target)} onMouseMove={(event) => trackPointerTarget(event.target)} onPointerUp={(event) => dropAtPointerTarget(event.target)} onMouseUp={(event) => dropAtPointerTarget(event.target)}>
+        {rootNodeIds.map((id) => <NodeRow key={id} id={id} depth={0} draggedNodeId={draggedNodeId} dropTargetId={dropTargetId} onDragStart={handleDragStart} onDragEnd={clearDrag} onDragTarget={handleNodeDragTarget} onDrop={handleNodeDrop} onContextMenu={(event, nodeId) => { event.preventDefault(); event.stopPropagation(); setContextMenu({ nodeId, x: event.clientX, y: event.clientY }); }} onSelect={(nodeId) => { setContextMenu(null); selectNode(nodeId); }} />)}
+        <div className="root-drop-zone" onPointerEnter={() => { if (pointerDragRef.current) setDropTargetId(null); }} onPointerUp={handleRootDrop} onMouseEnter={() => { if (pointerDragRef.current) setDropTargetId(null); }} onMouseUp={handleRootDrop}>Drag here to place at root level</div>
       </div>
       <p className="panel-hint">Drag a node name onto another node to make it a child. Use the arrow to expand or collapse children.</p>
       {contextMenu && (
         <div className="hierarchy-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}>
-          <button type="button" onClick={() => { addChildNode(contextMenu.nodeId); setContextMenu(null); }}><Icon name="plus" size={14} /> Add child node</button>
+          {contextMenu.nodeId
+            ? <button type="button" onClick={() => { addChildNode(contextMenu.nodeId!); setContextMenu(null); }}><Icon name="plus" size={14} /> Add child node</button>
+            : <button type="button" onClick={() => { addRootNode(); setContextMenu(null); }}><Icon name="plus" size={14} /> Add empty node</button>}
         </div>
       )}
     </section>

@@ -13,9 +13,11 @@ interface ToolbarProps {
   recentProjects: RecentProject[];
   showGrid: boolean;
   onToggleGrid: () => void;
+  workspaceMode: 'nodes' | 'canvas';
+  onWorkspaceModeChange: (mode: 'nodes' | 'canvas') => void;
 }
 
-export function Toolbar({ onNewProject, onOpenProject, onSaveProject, onOpenRecent, onExport, projectName, recentProjects, showGrid, onToggleGrid }: ToolbarProps) {
+export function Toolbar({ onNewProject, onOpenProject, onSaveProject, onOpenRecent, onExport, projectName, recentProjects, showGrid, onToggleGrid, workspaceMode, onWorkspaceModeChange }: ToolbarProps) {
   const activeTool = useProjectStore((state) => state.activeTool);
   const showPivot = useProjectStore((state) => state.showPivot);
   const snapEnabled = useProjectStore((state) => state.snapEnabled);
@@ -44,6 +46,12 @@ export function Toolbar({ onNewProject, onOpenProject, onSaveProject, onOpenRece
       <div className="brand-mark" aria-hidden="true"><span /><span /><span /><span /></div>
       <div className="brand">Pixel Rig <strong>Studio</strong></div>
       <div className="toolbar-divider" />
+      <div className="workspace-mode-switch" aria-label="Workspace mode">
+        <button className={workspaceMode === 'nodes' ? 'active' : ''} type="button" onClick={() => onWorkspaceModeChange('nodes')}><Icon name="layers" /> Nodes</button>
+        <button className={workspaceMode === 'canvas' ? 'active' : ''} type="button" onClick={() => onWorkspaceModeChange('canvas')}><Icon name="pixel" /> Canvas</button>
+      </div>
+      <div className="toolbar-divider" />
+      {workspaceMode === 'nodes' && <>
       <div className="transform-tools" aria-label="Transform tools">
         {transformTools.map(({ tool, label, icon }) => (
           <button key={tool} type="button" className={`compact-tool ${activeTool === tool ? 'active' : ''}`} title={label} aria-pressed={activeTool === tool} onClick={() => setActiveTool(tool)}>
@@ -74,6 +82,7 @@ export function Toolbar({ onNewProject, onOpenProject, onSaveProject, onOpenRece
       <button className="compact-tool" type="button" title="Flip vertically" disabled={!selectedNodeId} onClick={() => selectedNodeId && flipNode(selectedNodeId, 'vertical')}><Icon name="flipVertical" /></button>
       <button className="compact-tool" type="button" title="Reset transform" disabled={!selectedNodeId} onClick={() => selectedNodeId && resetNodeTransform(selectedNodeId)}><Icon name="reset" /></button>
       <div className="toolbar-divider" />
+      </>}
       <div className="project-name">{projectName} <span>•</span> Studio</div>
       <button className="file-tool" type="button" onClick={onNewProject}><Icon name="plus" /> New</button>
       <button className="file-tool" type="button" onClick={onOpenProject}><Icon name="import" /> Open</button>
@@ -83,9 +92,9 @@ export function Toolbar({ onNewProject, onOpenProject, onSaveProject, onOpenRece
         {recentProjects.map((recent) => <option key={recent.id} value={recent.id}>{recent.name} — {recent.path ?? 'Saved project snapshot'}</option>)}
       </select>
       <div className="toolbar-spacer" />
-      <button className="tool-button" type="button" onClick={onToggleGrid} aria-pressed={showGrid}>
+      {workspaceMode === 'nodes' && <button className="tool-button" type="button" onClick={onToggleGrid} aria-pressed={showGrid}>
         <Icon name="grid" /> Grid
-      </button>
+      </button>}
       <button className="tool-button" type="button" onClick={onExport}>
         <Icon name="download" /> Export
       </button>

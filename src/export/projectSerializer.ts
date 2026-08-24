@@ -1,5 +1,5 @@
 import type { RenderableProject } from './animationRenderer';
-import type { AnimationFrame, NodeFrameState, ProjectSettings, RotationSnapAngle } from '../types/project';
+import { nodeSpriteIds, type AnimationFrame, type NodeFrameState, type ProjectSettings, type RigNode, type RotationSnapAngle } from '../types/project';
 
 export interface SerializableProject extends RenderableProject {
   fps: number;
@@ -31,6 +31,7 @@ export interface AnimationDataFile {
     name: string;
     parentId: string | null;
     assetId: string | null;
+    assetIds?: string[];
     pivot: { x: number; y: number };
   }>;
   frames: AnimationFrame[];
@@ -39,7 +40,7 @@ export interface AnimationDataFile {
 export function projectFile(project: SerializableProject): ProjectFile {
   return {
     format: 'pixel-rig-studio-project',
-    version: 1,
+    version: 3,
     savedAt: new Date().toISOString(),
     settings: project.settings,
     assets: project.assets,
@@ -66,12 +67,25 @@ export function parseProjectFile(source: string): SerializableProject {
     throw new Error('This is not a Pixel Rig Studio project file.');
   }
   if (typeof file.animation.fps !== 'number' || file.animation.fps < 1 || !Number.isFinite(file.animation.fps)) throw new Error('The project FPS is invalid.');
+  const nodes = Object.fromEntries(Object.entries(file.nodes).map(([nodeId, rawNode]) => {
+    const node = rawNode as RigNode;
+    const assetIds = Array.isArray(node.assetIds) ? [...new Set(node.assetIds)] : node.assetId ? [node.assetId] : [];
+    return [nodeId, { ...node, assetIds, assetId: assetIds[0] ?? null }];
+  })) as SerializableProject['nodes'];
+  const frames = file.animation.frames.map((frame) => ({
+    ...frame,
+    nodeStates: Object.fromEntries(Object.entries(frame.nodeStates).map(([nodeId, state]) => [nodeId, {
+      ...state,
+      imageIndex: Number.isFinite(state.imageIndex) ? Math.max(0, Math.round(state.imageIndex)) : 0,
+      sortingOrder: Number.isFinite(state.sortingOrder) ? Math.round(state.sortingOrder) : nodes[nodeId]?.sortingOrder ?? 0,
+    }])),
+  }));
   return {
     settings: normalizeProjectSettings(file.settings),
     assets: file.assets,
-    nodes: file.nodes,
+    nodes,
     rootNodeIds: file.rootNodeIds,
-    frames: file.animation.frames,
+    frames,
     fps: Math.min(60, Math.round(file.animation.fps)),
     isLooping: Boolean(file.animation.loop),
   } as SerializableProject;
@@ -95,14 +109,15 @@ export function normalizeProjectSettings(settings: Pick<ProjectSettings, 'canvas
 export function animationDataFile(project: SerializableProject): AnimationDataFile {
   return {
     format: 'pixel-rig-animation',
-    version: 1,
+    version: 3,
     fps: project.fps,
     loop: project.isLooping,
     canvasSize: project.settings.canvasSize,
     nodes: Object.fromEntries(Object.entries(project.nodes).map(([id, node]) => [id, {
       name: node.name,
       parentId: node.parentId,
-      assetId: node.assetId,
+      assetId: node.assetId ?? nodeSpriteIds(node)[0] ?? null,
+      assetIds: nodeSpriteIds(node),
       pivot: node.pivot,
     }])),
     frames: project.frames,
@@ -117,7 +132,8 @@ function isNodeFrameState(value: unknown): value is NodeFrameState {
     && typeof state.rotation === 'number'
     && state.scale && typeof state.scale.x === 'number' && typeof state.scale.y === 'number'
     && typeof state.visible === 'boolean'
-    && typeof state.imageIndex === 'number',
+    && typeof state.imageIndex === 'number'
+    && (state.sortingOrder === undefined || typeof state.sortingOrder === 'number'),
   );
 }
 
@@ -143,6 +159,12 @@ export function parseAnimationData(source: string): AnimationDataFile {
     loop: Boolean(file.loop),
     canvasSize: file.canvasSize ?? { x: 0, y: 0 },
     nodes: file.nodes ?? {},
-    frames: file.frames,
+    frames: file.frames.map((frame) => ({
+      ...frame,
+      nodeStates: Object.fromEntries(Object.entries(frame.nodeStates).map(([nodeId, state]) => [nodeId, {
+        ...state,
+        sortingOrder: Number.isFinite(state.sortingOrder) ? Math.round(state.sortingOrder) : 0,
+      }])),
+    })),
   };
 }
