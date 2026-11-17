@@ -1,0 +1,81 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["message", "operations"],
+  "properties": {
+    "message": { "type": "string" },
+    "operations": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "type": "object", "additionalProperties": false,
+            "required": ["type", "nodeId", "frameNumbers", "positionX", "positionY", "rotation", "scaleX", "scaleY", "visible", "spriteIndex", "sortingOrder"],
+            "properties": {
+              "type": { "type": "string", "enum": ["set_node_frame"] },
+              "nodeId": { "type": "string" },
+              "frameNumbers": { "type": "array", "items": { "type": "integer" } },
+              "positionX": { "type": ["number", "null"] }, "positionY": { "type": ["number", "null"] },
+              "rotation": { "type": ["number", "null"] },
+              "scaleX": { "type": ["number", "null"] }, "scaleY": { "type": ["number", "null"] },
+              "visible": { "type": ["boolean", "null"] },
+              "spriteIndex": { "type": ["integer", "null"] }, "sortingOrder": { "type": ["integer", "null"] }
+            }
+          },
+          {
+            "type": "object", "additionalProperties": false,
+            "required": ["type", "nodeId", "name", "pivotX", "pivotY", "visible", "locked"],
+            "properties": {
+              "type": { "type": "string", "enum": ["set_node"] }, "nodeId": { "type": "string" },
+              "name": { "type": ["string", "null"] }, "pivotX": { "type": ["number", "null"] },
+              "pivotY": { "type": ["number", "null"] }, "visible": { "type": ["boolean", "null"] }, "locked": { "type": ["boolean", "null"] }
+            }
+          },
+          {
+            "type": "object", "additionalProperties": false,
+            "required": ["type", "nodeId", "name", "parentId", "spriteIds"],
+            "properties": {
+              "type": { "type": "string", "enum": ["add_node"] }, "nodeId": { "type": "string" }, "name": { "type": "string" },
+              "parentId": { "type": ["string", "null"] }, "spriteIds": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          {
+            "type": "object", "additionalProperties": false,
+            "required": ["type", "nodeId"],
+            "properties": { "type": { "type": "string", "enum": ["remove_node"] }, "nodeId": { "type": "string" } }
+          },
+          {
+            "type": "object", "additionalProperties": false,
+            "required": ["type", "nodeId", "spriteIds"],
+            "properties": { "type": { "type": "string", "enum": ["set_node_sprites"] }, "nodeId": { "type": "string" }, "spriteIds": { "type": "array", "items": { "type": "string" } } }
+          },
+          {
+            "type": "object", "additionalProperties": false,
+            "required": ["type", "afterFrameNumber", "copyFromFrameNumber", "count"],
+            "properties": { "type": { "type": "string", "enum": ["add_frames"] }, "afterFrameNumber": { "type": "integer" }, "copyFromFrameNumber": { "type": "integer" }, "count": { "type": "integer" } }
+          },
+          {
+            "type": "object", "additionalProperties": false,
+            "required": ["type", "frameNumbers"],
+            "properties": { "type": { "type": "string", "enum": ["remove_frames"] }, "frameNumbers": { "type": "array", "items": { "type": "integer" } } }
+          },
+          {
+            "type": "object", "additionalProperties": false,
+            "required": ["type", "frameNumber", "toFrameNumber"],
+            "properties": { "type": { "type": "string", "enum": ["move_frame"] }, "frameNumber": { "type": "integer" }, "toFrameNumber": { "type": "integer" } }
+          },
+          {
+            "type": "object", "additionalProperties": false,
+            "required": ["type", "frameNumbers", "name", "color"],
+            "properties": { "type": { "type": "string", "enum": ["group_frames"] }, "frameNumbers": { "type": "array", "items": { "type": "integer" } }, "name": { "type": "string" }, "color": { "type": "string" } }
+          },
+          {
+            "type": "object", "additionalProperties": false,
+            "required": ["type", "fps", "loop"],
+            "properties": { "type": { "type": "string", "enum": ["set_animation"] }, "fps": { "type": ["integer", "null"] }, "loop": { "type": ["boolean", "null"] } }
+          }
+        ]
+      }
+    }
+  }
+}

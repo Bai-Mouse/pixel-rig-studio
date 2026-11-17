@@ -3,7 +3,7 @@ import { Icon } from '../components/Icon';
 import { useProjectStore } from '../state/projectStore';
 import { animationDataFile, parseAnimationData, type SerializableProject } from '../export/projectSerializer';
 import { saveExportFile } from '../export/nativeSave';
-import type { AnimationTemplate, TweenProperties } from '../types/project';
+import type { AnimationImportMode, AnimationTemplate, TweenProperties } from '../types/project';
 
 interface FrameDrag {
   sourceIndex: number;
@@ -38,6 +38,7 @@ export function Timeline() {
   const draggedFrameIndexRef = useRef<number | null>(null);
   const frameDragRef = useRef<FrameDrag | null>(null);
   const [ioStatus, setIoStatus] = useState('Playback starts from the selected frame');
+  const [importMode, setImportMode] = useState<AnimationImportMode>('replace');
   const [isSavingAnimation, setIsSavingAnimation] = useState(false);
   const [draggedFrameIndex, setDraggedFrameIndex] = useState<number | null>(null);
   const [dropFrameIndex, setDropFrameIndex] = useState<number | null>(null);
@@ -51,8 +52,13 @@ export function Timeline() {
   const [groupDialogMode, setGroupDialogMode] = useState<'create' | 'edit' | null>(null);
   const [groupName, setGroupName] = useState('Animation Group');
   const [groupColor, setGroupColor] = useState('#7887f2');
+  const [groupTargetId, setGroupTargetId] = useState('');
   const frames = useProjectStore((state) => state.frames);
   const currentFrameIndex = useProjectStore((state) => state.currentFrameIndex);
+  const selectedFrameIds = useProjectStore((state) => state.selectedFrameIds);
+  const effectiveSelectedFrameIds = selectedFrameIds.includes(frames[currentFrameIndex]?.id)
+    ? selectedFrameIds.filter((id) => frames.some((frame) => frame.id === id))
+    : frames[currentFrameIndex] ? [frames[currentFrameIndex].id] : [];
   const isPlaying = useProjectStore((state) => state.isPlaying);
   const playbackGroupId = useProjectStore((state) => state.playbackGroupId);
   const isLooping = useProjectStore((state) => state.isLooping);
@@ -70,6 +76,8 @@ export function Timeline() {
   const moveFrame = useProjectStore((state) => state.moveFrame);
   const insertTweenFrames = useProjectStore((state) => state.insertTweenFrames);
   const groupFrames = useProjectStore((state) => state.groupFrames);
+  const addFramesToGroup = useProjectStore((state) => state.addFramesToGroup);
+  const removeFramesFromGroup = useProjectStore((state) => state.removeFramesFromGroup);
   const renameFrameGroup = useProjectStore((state) => state.renameFrameGroup);
   const ungroupFrames = useProjectStore((state) => state.ungroupFrames);
   const applyAnimationTemplate = useProjectStore((state) => state.applyAnimationTemplate);
@@ -78,6 +86,9 @@ export function Timeline() {
   const playbackGroup = playbackGroupId
     ? frames.find((frame) => frame.group?.id === playbackGroupId)?.group
     : undefined;
+  const frameGroups = Array.from(new Map(frames.flatMap((frame) => frame.group ? [[frame.group.id, frame.group] as const] : [])).values());
+  const groupFrameCount = (groupId: string) => frames.filter((frame) => frame.group?.id === groupId).length;
+  const targetGroup = groupTargetId ? frameGroups.find((group) => group.id === groupTargetId) : undefined;
 
   useEffect(() => {
     if (!isPlaying) return;
@@ -110,7 +121,18 @@ export function Timeline() {
     setIsTweenDialogOpen(false);
   };
 
+  const deleteSelectedFrames = () => {
+    const count = effectiveSelectedFrameIds.length;
+    if (!count || count >= frames.length) return;
+    deleteFrame();
+    setIoStatus(count > 1 ? `Deleted ${count} selected frames. Ctrl+Z to undo.` : 'Deleted the selected frame. Ctrl+Z to undo.');
+  };
+
   const currentFrameGroup = frames[currentFrameIndex]?.group;
+  /** Selected frames that belong to the group being edited; only these can be removed from it. */
+  const removableGroupFrameIndexes = currentFrameGroup
+    ? frames.flatMap((frame, index) => frame.group?.id === currentFrameGroup.id && effectiveSelectedFrameIds.includes(frame.id) ? [index] : [])
+    : [];
 
   const chooseGroupFrame = (index: number) => {
     selectFrame(index);
@@ -124,13 +146,14 @@ export function Timeline() {
     setIsPickingTweenFrames(false);
     setGroupFrameIndexes([]);
     setIsPickingGroupFrames(true);
-    setIoStatus('Select the frames to group, then click Create group.');
+    setIoStatus('Select the frames to group, then choose Create group or add them to an existing group.');
   };
 
   const openCreateGroupDialog = () => {
     if (!groupFrameIndexes.length) return;
     setGroupName('Animation Group');
     setGroupColor('#7887f2');
+    setGroupTargetId('');
     setGroupDialogMode('create');
   };
 
@@ -143,14 +166,36 @@ export function Timeline() {
 
   const saveFrameGroup = () => {
     if (groupDialogMode === 'create') {
-      groupFrames(groupFrameIndexes, groupName, groupColor);
-      setIoStatus(`Grouped ${groupFrameIndexes.length} frame${groupFrameIndexes.length === 1 ? '' : 's'} as “${groupName.trim() || 'Animation Group'}”.`);
+      if (targetGroup) {
+        addFramesToGroup(groupFrameIndexes, targetGroup.id);
+        setIoStatus(`Added ${groupFrameIndexes.length} frame${groupFrameIndexes.length === 1 ? '' : 's'} to “${targetGroup.name}”. Ctrl+Z to undo.`);
+      } else {
+        groupFrames(groupFrameIndexes, groupName, groupColor);
+        setIoStatus(`Grouped ${groupFrameIndexes.length} frame${groupFrameIndexes.length === 1 ? '' : 's'} as “${groupName.trim() || 'Animation Group'}”. Ctrl+Z to undo.`);
+      }
       setGroupFrameIndexes([]);
       setIsPickingGroupFrames(false);
     } else if (groupDialogMode === 'edit' && currentFrameGroup) {
       renameFrameGroup(currentFrameGroup.id, groupName, groupColor);
-      setIoStatus(`Updated frame group “${groupName.trim() || 'Animation Group'}”.`);
+      setIoStatus(`Updated frame group “${groupName.trim() || 'Animation Group'}”. Ctrl+Z to undo.`);
     }
+    setGroupTargetId('');
+    setGroupDialogMode(null);
+  };
+
+  const removeSelectedFramesFromGroup = () => {
+    if (!currentFrameGroup || !removableGroupFrameIndexes.length) return;
+    const count = removableGroupFrameIndexes.length;
+    removeFramesFromGroup(removableGroupFrameIndexes);
+    setIoStatus(`Removed ${count} frame${count === 1 ? '' : 's'} from “${currentFrameGroup.name}”. Ctrl+Z to undo.`);
+    setGroupTargetId('');
+    setGroupDialogMode(null);
+  };
+
+  const removeAllGroupFrames = () => {
+    if (!currentFrameGroup) return;
+    ungroupFrames(currentFrameGroup.id);
+    setIoStatus(`Removed group “${currentFrameGroup.name}”. Ctrl+Z to undo.`);
     setGroupDialogMode(null);
   };
 
@@ -159,8 +204,15 @@ export function Timeline() {
     if (!file) return;
     try {
       const animation = parseAnimationData(await file.text());
-      if (!loadAnimation(animation)) throw new Error('This animation does not match any nodes in the current character.');
-      setIoStatus(`Imported ${animation.frames.length} animation frame${animation.frames.length === 1 ? '' : 's'}.`);
+      const startIndex = useProjectStore.getState().currentFrameIndex;
+      const options = importMode === 'replace' ? undefined : { mode: importMode, startIndex };
+      if (!loadAnimation(animation, options)) throw new Error('This animation does not match any nodes in the current character.');
+      const count = animation.frames.length;
+      const framesLabel = `frame${count === 1 ? '' : 's'}`;
+      const verb = importMode === 'insert' ? 'Inserted' : importMode === 'delta' ? 'Applied deltas for' : 'Overwrote';
+      setIoStatus(importMode === 'replace'
+        ? `Imported ${count} animation ${framesLabel} and replaced the timeline. Ctrl+Z to undo.`
+        : `${verb} ${count} ${framesLabel} from frame ${startIndex + 1}. Project FPS and loop were kept. Ctrl+Z to undo.`);
     } catch (error) {
       setIoStatus(error instanceof Error ? error.message : 'Could not import the animation.');
     }
@@ -269,7 +321,35 @@ export function Timeline() {
             <option value="walk">Walk · 6 frames</option>
             <option value="idle">Idle · 6 frames</option>
           </select>
-          <button type="button" onClick={() => animationInputRef.current?.click()}><Icon name="import" /> Import animation</button>
+          <select
+            className="animation-import-mode"
+            aria-label="Animation import placement"
+            title="Choose how an imported animation is placed: replace the timeline, add its pose deltas, insert it, or overwrite from the selected frame"
+            value={importMode}
+            onChange={(event) => {
+              const mode = event.target.value as AnimationImportMode;
+              setImportMode(mode);
+              setIoStatus(mode === 'replace'
+                ? 'Import animation will replace the whole timeline.'
+                : mode === 'delta'
+                  ? `Import animation will add each frame's pose change on top of frame ${currentFrameIndex + 1}.`
+                  : `Import animation will ${mode === 'insert' ? 'insert frames at' : 'overwrite frames from'} frame ${currentFrameIndex + 1}.`);
+            }}
+          >
+            <option value="replace">Replace timeline</option>
+            <option value="delta">Apply deltas from frame {currentFrameIndex + 1}</option>
+            <option value="insert">Insert at frame {currentFrameIndex + 1}</option>
+            <option value="overwrite">Overwrite from frame {currentFrameIndex + 1}</option>
+          </select>
+          <button
+            type="button"
+            title={importMode === 'replace'
+              ? 'Import a .animation.json file and replace the timeline'
+              : importMode === 'delta'
+                ? `Import a .animation.json file and add its frame-to-frame pose changes from frame ${currentFrameIndex + 1}`
+                : `Import a .animation.json file starting at frame ${currentFrameIndex + 1}`}
+            onClick={() => animationInputRef.current?.click()}
+          ><Icon name="import" /> Import animation</button>
           <button type="button" disabled={isSavingAnimation} onClick={() => void saveAnimation()}><Icon name="download" /> {isSavingAnimation ? 'Saving...' : 'Save animation'}</button>
         </div>
         <div className="timeline-actions">
@@ -281,7 +361,16 @@ export function Timeline() {
           {!isPickingGroupFrames && currentFrameGroup && <button type="button" className="frame-group-manage" style={{ '--group-color': currentFrameGroup.color } as CSSProperties} onClick={openEditGroupDialog}>Edit “{currentFrameGroup.name}”</button>}
           <button type="button" onClick={insertFrame} disabled={isPickingGroupFrames || isPickingTweenFrames}><Icon name="plus" /> Insert</button>
           <button type="button" onClick={duplicateFrame} disabled={isPickingGroupFrames || isPickingTweenFrames}><Icon name="copy" /> Duplicate</button>
-          <button type="button" onClick={deleteFrame} disabled={frames.length === 1 || isPickingGroupFrames || isPickingTweenFrames} title={frames.length === 1 ? 'An animation needs at least one frame' : 'Delete frame'}><Icon name="trash" /> Delete</button>
+          <button
+            type="button"
+            onClick={deleteSelectedFrames}
+            disabled={effectiveSelectedFrameIds.length >= frames.length || isPickingGroupFrames || isPickingTweenFrames}
+            title={effectiveSelectedFrameIds.length >= frames.length
+              ? 'An animation needs at least one frame'
+              : effectiveSelectedFrameIds.length > 1
+                ? `Delete ${effectiveSelectedFrameIds.length} selected frames`
+                : 'Delete frame'}
+          ><Icon name="trash" /> {effectiveSelectedFrameIds.length > 1 ? `Delete ${effectiveSelectedFrameIds.length}` : 'Delete'}</button>
         </div>
       </div>
       <div className="timeline-ruler">
@@ -293,9 +382,9 @@ export function Timeline() {
                 key={frame.id}
                 type="button"
                 data-frame-index={index}
-                className={`frame-cell ${index === currentFrameIndex ? 'selected' : ''} ${tweenFrameIndexes.includes(index) ? 'tween-endpoint' : ''} ${groupFrameIndexes.includes(index) ? 'group-pick' : ''} ${frame.group ? 'grouped' : ''} ${index === draggedFrameIndex ? 'dragging' : ''} ${index === dropFrameIndex && index !== draggedFrameIndex ? 'drop-target' : ''}`}
+                className={`frame-cell ${index === currentFrameIndex ? 'selected' : ''} ${effectiveSelectedFrameIds.includes(frame.id) ? 'multi-selected' : ''} ${tweenFrameIndexes.includes(index) ? 'tween-endpoint' : ''} ${groupFrameIndexes.includes(index) ? 'group-pick' : ''} ${frame.group ? 'grouped' : ''} ${index === draggedFrameIndex ? 'dragging' : ''} ${index === dropFrameIndex && index !== draggedFrameIndex ? 'drop-target' : ''}`}
                 style={frame.group ? { '--frame-group-color': frame.group.color } as CSSProperties : undefined}
-                onClick={() => { if (!frameDragRef.current?.moved) selectFrame(index); }}
+                onClick={(event) => { if (event.detail === 0) selectFrame(index, event.shiftKey ? 'range' : event.ctrlKey || event.metaKey ? 'toggle' : 'single'); }}
                 onPointerDown={(event) => {
                   if (event.button !== 0) return;
                   event.preventDefault();
@@ -307,10 +396,15 @@ export function Timeline() {
                     chooseGroupFrame(index);
                     return;
                   }
+                  if (event.shiftKey || event.ctrlKey || event.metaKey) {
+                    selectFrame(index, event.shiftKey ? 'range' : 'toggle');
+                    return;
+                  }
                   selectFrame(index);
                   startFrameDrag(index, event.clientX, event.clientY);
                 }}
                 aria-label={`Frame ${index + 1}`}
+                aria-pressed={effectiveSelectedFrameIds.includes(frame.id)}
                 aria-current={index === currentFrameIndex ? 'step' : undefined}
               >
                 <span className="frame-number">{String(index + 1).padStart(2, '0')}</span>
@@ -330,6 +424,7 @@ export function Timeline() {
         </div>
       </div>
       <div className="timeline-footer">
+        <span>{effectiveSelectedFrameIds.length} selected · Ctrl/Cmd: toggle · Shift: range · Ctrl+Z: undo</span>
         <span>Frame <strong>{currentFrameIndex + 1}</strong> of <strong>{frames.length}</strong></span>
         <span>{isPlaying && playbackGroup ? `Playing group “${playbackGroup.name}”${isLooping ? ' · looping' : ''}` : ioStatus}</span>
       </div>
@@ -346,14 +441,33 @@ export function Timeline() {
       </div>}
       {groupDialogMode && <div className="tween-dialog-backdrop" onPointerDown={(event) => { if (event.target === event.currentTarget) setGroupDialogMode(null); }}>
         <div className="tween-dialog frame-group-dialog" role="dialog" aria-modal="true" aria-label={groupDialogMode === 'create' ? 'Create frame group' : 'Edit frame group'}>
-          <header><div><strong>{groupDialogMode === 'create' ? 'Create frame group' : 'Edit frame group'}</strong><small>{groupDialogMode === 'create' ? `${groupFrameIndexes.length} selected frame${groupFrameIndexes.length === 1 ? '' : 's'}` : `${frames.filter((frame) => frame.group?.id === currentFrameGroup?.id).length} grouped frames`}</small></div><button type="button" onClick={() => setGroupDialogMode(null)}>Close</button></header>
-          <label className="frame-group-name">Group name<input autoFocus value={groupName} onChange={(event) => setGroupName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') saveFrameGroup(); }} /></label>
-          <label className="frame-group-color">Group color<input type="color" value={groupColor} onChange={(event) => setGroupColor(event.target.value)} /></label>
+          <header><div><strong>{groupDialogMode === 'create' ? 'Group frames' : `Edit “${currentFrameGroup?.name ?? 'frame group'}”`}</strong><small>{groupDialogMode === 'create'
+            ? `${groupFrameIndexes.length} selected frame${groupFrameIndexes.length === 1 ? '' : 's'}${targetGroup ? ` → ${targetGroup.name}` : ''}`
+            : `${frames.filter((frame) => frame.group?.id === currentFrameGroup?.id).length} grouped frames · ${removableGroupFrameIndexes.length} selected`}</small></div><button type="button" onClick={() => setGroupDialogMode(null)}>Close</button></header>
+          {groupDialogMode === 'create' ? <>
+            <label className="frame-group-target">Add to<select value={groupTargetId} onChange={(event) => setGroupTargetId(event.target.value)}>
+              <option value="">New group</option>
+              {frameGroups.map((group) => <option key={group.id} value={group.id}>{group.name} ({groupFrameCount(group.id)} frames)</option>)}
+            </select></label>
+            {targetGroup
+              ? <p className="frame-group-hint">The selected frames join “{targetGroup.name}”. Its name and color stay unchanged; use “Edit” on one of its frames to rename it.</p>
+              : <>
+                {!frameGroups.length && <p className="frame-group-hint">No other groups exist yet, so only “New group” is available. Name the first group below — once it exists it shows up in this “Add to” list.</p>}
+                <label className="frame-group-name">Group name<input autoFocus value={groupName} onChange={(event) => setGroupName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') saveFrameGroup(); }} /></label>
+                <label className="frame-group-color">Group color<input type="color" value={groupColor} onChange={(event) => setGroupColor(event.target.value)} /></label>
+              </>}
+          </> : <>
+            <label className="frame-group-name">Group name<input autoFocus value={groupName} onChange={(event) => setGroupName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') saveFrameGroup(); }} /></label>
+            <label className="frame-group-color">Group color<input type="color" value={groupColor} onChange={(event) => setGroupColor(event.target.value)} /></label>
+            {removableGroupFrameIndexes.length > 0 && <p className="frame-group-hint">“Remove selected” takes only the {removableGroupFrameIndexes.length} selected frame{removableGroupFrameIndexes.length === 1 ? '' : 's'} out of the group; the rest stay grouped.</p>}
+          </>}
           <footer>
-            {groupDialogMode === 'edit' && currentFrameGroup && <button className="ungroup-button" type="button" onClick={() => { ungroupFrames(currentFrameGroup.id); setGroupDialogMode(null); setIoStatus(`Removed group “${currentFrameGroup.name}”.`); }}>Ungroup frames</button>}
-            <span />
+            {groupDialogMode === 'edit' && currentFrameGroup && <span className="frame-group-footer-actions">
+              <button className="ungroup-button" type="button" disabled={!removableGroupFrameIndexes.length} onClick={removeSelectedFramesFromGroup} title="Take only the selected frames out of this group">Remove selected</button>
+              <button className="ungroup-button" type="button" onClick={removeAllGroupFrames} title="Take every frame out of this group">Remove all</button>
+            </span>}
             <button type="button" onClick={() => setGroupDialogMode(null)}>Cancel</button>
-            <button type="button" onClick={saveFrameGroup}>{groupDialogMode === 'create' ? 'Create group' : 'Save group'}</button>
+            <button type="button" onClick={saveFrameGroup}>{groupDialogMode === 'create' ? targetGroup ? 'Add to group' : 'Create group' : 'Save group'}</button>
           </footer>
         </div>
       </div>}

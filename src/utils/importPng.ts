@@ -1,10 +1,13 @@
 import type { SpriteAsset, SpriteSlice, SpriteSource } from '../types/project';
+import { remapAnchorForCrop } from './spriteAnchor';
 
 export interface SpriteImportCandidate {
   name: string;
   src: string;
   width: number;
   height: number;
+  /** Reuse an existing imported PNG rather than creating a duplicate source. */
+  sourceId?: string;
 }
 
 function readAsDataUrl(file: File): Promise<string> {
@@ -49,14 +52,28 @@ function loadImage(source: string): Promise<HTMLImageElement> {
   });
 }
 
-function sourceFor(candidate: SpriteImportCandidate): SpriteSource {
+export function sourceFor(candidate: SpriteImportCandidate): SpriteSource {
   return {
-    id: `source-${crypto.randomUUID()}`,
+    id: candidate.sourceId ?? `source-${crypto.randomUUID()}`,
     name: candidate.name,
     src: candidate.src,
     width: candidate.width,
     height: candidate.height,
   };
+}
+
+export function assetSource(asset: SpriteAsset): SpriteSource {
+  return asset.source ?? { id: `legacy-source-${asset.id}`, name: asset.name, src: asset.src, width: asset.width, height: asset.height };
+}
+
+export function importedSources(assets: SpriteAsset[]): SpriteSource[] {
+  return [...new Map(assets.map((asset) => { const source = assetSource(asset); return [source.id, source]; })).values()];
+}
+
+/** Only this sprite changes source; its ID and node/frame assignments are retained. */
+export async function rebindAssetSource(asset: SpriteAsset, source: SpriteSource, slice: SpriteSlice): Promise<SpriteAsset> {
+  const sameSource = asset.source?.id === source.id && asset.source.src === source.src;
+  return cropAssetFromSource({ ...asset, source, slice: sameSource ? asset.slice : undefined }, slice);
 }
 
 function encodeMask(mask: Uint8Array) {
@@ -213,6 +230,8 @@ export async function cropAssetFromSource(asset: SpriteAsset, slice: SpriteSlice
   const x = Math.max(0, Math.min(asset.source.width - width, Math.round(slice.x)));
   const y = Math.max(0, Math.min(asset.source.height - height, Math.round(slice.y)));
   const geometry = { x, y, width, height };
+  const previousSlice = asset.slice ?? { x: 0, y: 0, width: asset.width, height: asset.height };
+  const anchor = asset.anchor ? remapAnchorForCrop(asset.anchor, previousSlice, geometry) : undefined;
   const keepMask = asset.slice
     && asset.slice.x === x && asset.slice.y === y
     && asset.slice.width === width && asset.slice.height === height
@@ -221,6 +240,7 @@ export async function cropAssetFromSource(asset: SpriteAsset, slice: SpriteSlice
   const image = await loadImage(asset.source.src);
   return {
     ...asset,
+    ...(anchor ? { anchor } : {}),
     src: cropImage(image, { ...geometry, ...(keepMask ? { mask: keepMask } : {}) }),
     width,
     height,
@@ -230,7 +250,7 @@ export async function cropAssetFromSource(asset: SpriteAsset, slice: SpriteSlice
 
 /** Re-renders every slice belonging to one imported PNG while preserving asset and node IDs. */
 export async function replaceAssetsFromSource(assets: SpriteAsset[], sourceId: string, candidate: SpriteImportCandidate): Promise<SpriteAsset[]> {
-  const related = assets.filter((asset) => asset.source?.id === sourceId && asset.slice);
+  const related = assets.filter((asset) => assetSource(asset).id === sourceId).map((asset) => ({ ...asset, slice: asset.slice ?? { x: 0, y: 0, width: asset.width, height: asset.height } }));
   if (!related.length) throw new Error('This sprite has no replaceable source image.');
   const incompatible = related.find((asset) => !asset.slice || asset.slice.x + asset.slice.width > candidate.width || asset.slice.y + asset.slice.height > candidate.height);
   if (incompatible) throw new Error(`The replacement PNG is too small for the saved slice layout (${incompatible.slice!.x + incompatible.slice!.width} x ${incompatible.slice!.y + incompatible.slice!.height} px required).`);

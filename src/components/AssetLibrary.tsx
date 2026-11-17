@@ -2,11 +2,13 @@ import { useMemo, useRef, useState, type MouseEvent } from 'react';
 import { Icon } from './Icon';
 import { SpriteSheetImportDialog } from './SpriteSheetImportDialog';
 import { useProjectStore } from '../state/projectStore';
-import { createAssetsFromCandidate, createAssetsFromSlices, filesToImportCandidates, type SpriteImportCandidate } from '../utils/importPng';
-import type { SpriteSlice } from '../types/project';
+import { createAssetsFromCandidate, createAssetsFromSlices, filesToImportCandidates, importedSources, replaceAssetsFromSource, type SpriteImportCandidate } from '../utils/importPng';
+import type { SpriteSlice, SpriteSource } from '../types/project';
 
 export function AssetLibrary() {
   const inputRef = useRef<HTMLInputElement>(null);
+  const sheetReplacementRef = useRef<HTMLInputElement>(null);
+  const [showImport, setShowImport] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -16,13 +18,16 @@ export function AssetLibrary() {
   // causes React 18 to continually re-render the component.
   const assetsById = useProjectStore((state) => state.assets);
   const assets = useMemo(() => Object.values(assetsById), [assetsById]);
+  const sources = useMemo(() => importedSources(assets), [assets]);
   const folders = useProjectStore((state) => state.folders);
   const selectedAssetIds = useProjectStore((state) => state.selectedAssetIds);
   const selectAssets = useProjectStore((state) => state.selectAssets);
   const addAssets = useProjectStore((state) => state.addAssets);
+  const replaceAssets = useProjectStore((state) => state.replaceAssets);
   const selectionAnchorRef = useRef<string | null>(null);
 
-  const openDialog = () => inputRef.current?.click();
+  const openDialog = () => { setError(null); setImportQueue([]); setShowImport(true); };
+  const useSource = (source: SpriteSource) => { setError(null); setImportQueue([{ ...source, sourceId: source.id }]); };
   const selectFromLibrary = (event: MouseEvent<HTMLButtonElement>, assetId: string) => {
     const isToggle = event.ctrlKey || event.metaKey;
     if (event.shiftKey && selectionAnchorRef.current) {
@@ -53,6 +58,7 @@ export function AssetLibrary() {
       const candidates = await filesToImportCandidates(files);
       if (!candidates.length) throw new Error('Choose one or more PNG files.');
       setImportQueue(candidates);
+      setShowImport(true);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Import failed.');
     } finally {
@@ -66,8 +72,12 @@ export function AssetLibrary() {
     setError(null);
     setIsImporting(true);
     try {
-      addAssets(slices ? await createAssetsFromSlices(candidate, slices) : await createAssetsFromCandidate(candidate));
+      const snapshot = useProjectStore.getState();
+      const created = slices ? await createAssetsFromSlices(candidate, slices) : await createAssetsFromCandidate(candidate);
+      if (useProjectStore.getState().assets !== snapshot.assets || useProjectStore.getState().nodes !== snapshot.nodes) throw new Error('Project changed during import. Please retry.');
+      addAssets(created);
       setImportQueue((queue) => queue.slice(1));
+      if (importQueue.length <= 1) setShowImport(false);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Sprite slicing failed.');
     } finally {
@@ -75,8 +85,25 @@ export function AssetLibrary() {
     }
   };
 
+  const replaceSheet = async (files: FileList | null) => {
+    const sourceId = importQueue[0]?.sourceId;
+    if (!sourceId || !files?.length) return;
+    setIsImporting(true); setError(null);
+    try {
+      const snapshot = useProjectStore.getState().assets;
+      const candidates = await filesToImportCandidates(Array.from(files));
+      if (candidates.length !== 1) throw new Error('Choose one PNG.');
+      const updated = await replaceAssetsFromSource(Object.values(snapshot), sourceId, candidates[0]);
+      if (useProjectStore.getState().assets !== snapshot) throw new Error('Images changed during replacement. Please try again.');
+      replaceAssets(updated);
+      setImportQueue([{ ...candidates[0], sourceId }]);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Replacement failed.'); }
+    finally { setIsImporting(false); }
+  };
+
   return (
     <section className="panel asset-panel">
+      <input ref={sheetReplacementRef} type="file" accept="image/png,.png" hidden onChange={(event) => { void replaceSheet(event.target.files); event.currentTarget.value = ''; }} />
       <input
         ref={inputRef}
         type="file"
@@ -105,7 +132,7 @@ export function AssetLibrary() {
         <button className="dropzone-button" type="button" onClick={openDialog}>
           <Icon name="import" size={18} />
           <span>{isImporting ? 'Preparing PNG...' : 'Drop PNGs or browse'}</span>
-          <small>Sprite assets remain crisp at any zoom</small>
+          <small>Import new PNGs or slice an existing sheet</small>
         </button>
       </div>
       {error && <p className="import-error">{error}</p>}
@@ -117,7 +144,7 @@ export function AssetLibrary() {
           </button>
         ))}
       </div>
-      {importQueue[0] && <SpriteSheetImportDialog candidate={importQueue[0]} queueLength={importQueue.length} isImporting={isImporting} onImport={(slices) => void confirmSpriteImport(slices)} onCancel={() => setImportQueue([])} />}
+      {showImport && <SpriteSheetImportDialog candidate={importQueue[0] ?? null} sources={sources} queueLength={importQueue.length} isImporting={isImporting} error={error} onBrowse={() => inputRef.current?.click()} onChooseSource={useSource} onReplaceSource={() => sheetReplacementRef.current?.click()} onImport={(slices) => void confirmSpriteImport(slices)} onCancel={() => { setImportQueue([]); setShowImport(false); }} />}
     </section>
   );
 }

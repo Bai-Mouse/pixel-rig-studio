@@ -138,10 +138,24 @@ export function FrameDrawingCanvas() {
       if (event.ctrlKey || event.metaKey) {
         if (key === 'z') {
           event.preventDefault();
-          restoreHistory(event.shiftKey ? 'redo' : 'undo');
+          const state = useProjectStore.getState();
+          const entry = event.shiftKey ? state.redoStack[state.redoStack.length - 1] : state.transformHistory[state.transformHistory.length - 1];
+          // Timeline edits (import, insert, delete, grouping) are undone by the store, not by this drawing history.
+          if (entry && 'timelineBefore' in entry) {
+            if (event.shiftKey) state.redoTransform(); else state.undoTransform();
+          } else {
+            const snapshot = entry && 'codexEditId' in entry ? event.shiftKey ? entry.before : entry.after : null;
+            if (snapshot && JSON.stringify(state.frames) === JSON.stringify(snapshot.frames)) {
+              if (event.shiftKey) state.redoTransform(); else state.undoTransform();
+            } else restoreHistory(event.shiftKey ? 'redo' : 'undo');
+          }
         } else if (key === 'y') {
           event.preventDefault();
-          restoreHistory('redo');
+          const state = useProjectStore.getState();
+          const entry = state.redoStack[state.redoStack.length - 1];
+          if (entry && 'timelineBefore' in entry) state.redoTransform();
+          else if (entry && 'codexEditId' in entry && JSON.stringify(state.frames) === JSON.stringify(entry.before.frames)) state.redoTransform();
+          else restoreHistory('redo');
         }
         return;
       }

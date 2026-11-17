@@ -17,6 +17,11 @@ export interface SpriteAsset {
   source?: SpriteSource;
   /** The rectangle this sprite occupies in its source PNG. */
   slice?: SpriteSlice;
+  /**
+   * Sprite-space pixel (0..width, 0..height) that is aligned to the node origin.
+   * Sprites without an anchor fall back to their node's pivot.
+   */
+  anchor?: Vec2;
 }
 
 export interface SpriteSource {
@@ -47,6 +52,8 @@ export interface RigNode {
   assetId?: AssetId | null;
   /** Higher values are drawn in front of lower values. */
   sortingOrder?: number;
+  /** Sprite index that new frames start from. Frames may still pick another sprite. */
+  defaultImageIndex?: number;
   pivot: Vec2;
   transform: {
     position: Vec2;
@@ -115,4 +122,16 @@ export interface TweenProperties {
   scale: boolean;
   visible: boolean;
   sprite: boolean;
+}
+
+/** How an imported animation is placed on the existing timeline. */
+export type AnimationImportMode = 'replace' | 'insert' | 'overwrite' | 'delta';
+
+export interface AnimationImportOptions {
+  mode: AnimationImportMode;
+  /**
+   * Timeline index of the first imported frame. Defaults to the current frame.
+   * Only used by the `insert`, `overwrite` and `delta` modes.
+   */
+  startIndex?: number;
 }

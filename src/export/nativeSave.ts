@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { open, save, type DialogFilter } from '@tauri-apps/plugin-dialog';
+import { isProtectedProjectPath } from '../project/projectCopy';
 
 export type ExportWriteResult = 'saved' | 'downloaded' | 'cancelled';
 
@@ -12,13 +13,14 @@ export function isDesktopRuntime() {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
-export async function saveProjectFile(name: string, content: string, existingPath?: string | null): Promise<string | null> {
+export async function saveProjectFile(name: string, content: string, existingPath?: string | null, protectedPaths: string[] = []): Promise<string | null> {
   if (!isDesktopRuntime()) {
     browserDownload(new Blob([content], { type: 'application/json' }), name);
     return `Browser download: ${name}`;
   }
   const path = existingPath ?? await save({ title: 'Save project', defaultPath: name, filters: [{ name: 'Pixel Rig Studio project', extensions: ['pixelrig.json', 'json'] }] });
   if (!path) return null;
+  if (isProtectedProjectPath(path, protectedPaths)) throw new Error('This is the original project path. Choose a different filename or folder to save the copy.');
   await invoke('write_export_file', { path, data: await bytes(new Blob([content], { type: 'application/json' })) });
   return path;
 }

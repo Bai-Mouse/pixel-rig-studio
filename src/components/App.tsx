@@ -9,10 +9,13 @@ import { Timeline } from '../timeline/Timeline';
 import { PixelEditor } from '../pixel-editor/PixelEditor';
 import { ExportDialog } from '../export/ExportDialog';
 import { ProjectStartScreen } from './ProjectStartScreen';
+import { TemplateSetupDialog } from './TemplateSetupDialog';
 import { parseProjectFile, projectFile, type SerializableProject } from '../export/projectSerializer';
 import { readRecentProjects, rememberProject, type RecentProject } from '../project/recentProjects';
 import { useProjectStore } from '../state/projectStore';
 import { isDesktopRuntime, openProjectFileDialog, saveProjectFile } from '../export/nativeSave';
+import { CodexChat } from '../codex/CodexChat';
+import { makeProjectCopy } from '../project/projectCopy';
 
 interface WorkspaceLayout {
   left: number;
@@ -65,10 +68,13 @@ export function App() {
   const [showGrid, setShowGrid] = useState(true);
   const [editingAssetId, setEditingAssetId] = useState<string | null>(null);
   const [showExport, setShowExport] = useState(false);
+  const [showCodex, setShowCodex] = useState(false);
   const [workspaceMode, setWorkspaceMode] = useState<'nodes' | 'canvas'>('nodes');
   const [showProjectStart, setShowProjectStart] = useState(true);
+  const [showTemplateSetup, setShowTemplateSetup] = useState(false);
   const [canReturnToEditor, setCanReturnToEditor] = useState(false);
   const [activeProjectPath, setActiveProjectPath] = useState<string | null>(null);
+  const [protectedProjectPaths, setProtectedProjectPaths] = useState<string[]>([]);
   const [workspaceLayout, setWorkspaceLayout] = useState<WorkspaceLayout>(restoredWorkspaceLayout);
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>(readRecentProjects);
   const projectInputRef = useRef<HTMLInputElement>(null);
@@ -76,7 +82,6 @@ export function App() {
   const projectName = useProjectStore((state) => state.projectName);
   const loadProject = useProjectStore((state) => state.loadProject);
   const createEmptyProject = useProjectStore((state) => state.createEmptyProject);
-  const createCharacterTemplateProject = useProjectStore((state) => state.createCharacterTemplateProject);
 
   useEffect(() => {
     try {
@@ -129,12 +134,24 @@ export function App() {
   } as CSSProperties;
 
   const saveProject = async () => {
-    const file = projectFile(currentProject());
-    const path = await saveProjectFile(`${projectName}.pixelrig.json`, JSON.stringify(file, null, 2), activeProjectPath);
-    if (path) {
-      setActiveProjectPath(isDesktopRuntime() ? path : null);
-      setRecentProjects(rememberProject(file, projectName, path));
-    }
+    try {
+      const file = projectFile(currentProject());
+      const path = await saveProjectFile(`${projectName}.pixelrig.json`, JSON.stringify(file, null, 2), activeProjectPath, protectedProjectPaths);
+      if (path) {
+        setActiveProjectPath(isDesktopRuntime() ? path : null);
+        setRecentProjects(rememberProject(file, projectName, path));
+      }
+    } catch (error) { window.alert(error instanceof Error ? error.message : 'Could not save project.'); }
+  };
+
+  const copyProject = () => {
+    useProjectStore.getState().commitInspectorEdit();
+    useProjectStore.getState().commitTransform();
+    const copy = makeProjectCopy(currentProject(), projectName);
+    loadProject(copy.project, copy.name);
+    setProtectedProjectPaths((paths) => activeProjectPath ? [...paths, activeProjectPath] : paths);
+    setActiveProjectPath(copy.path);
+    setEditingAssetId(null); setShowExport(false); setShowCodex(false);
   };
 
   const openRecent = (recent: RecentProject) => {
@@ -143,6 +160,7 @@ export function App() {
       loadProject(project, recent.name);
       setRecentProjects(rememberProject(recent.project, recent.name, recent.path));
       setActiveProjectPath(recent.path && !recent.path.startsWith('Browser ') ? recent.path : null);
+      setProtectedProjectPaths([]);
       setShowProjectStart(false);
       setCanReturnToEditor(false);
     } catch {
@@ -159,6 +177,7 @@ export function App() {
       loadProject(project, name);
       setRecentProjects(rememberProject(projectFile(project), name, file.webkitRelativePath || `Browser file: ${file.name}`));
       setActiveProjectPath(null);
+      setProtectedProjectPaths([]);
       setShowProjectStart(false);
       setCanReturnToEditor(false);
     } catch (error) {
@@ -175,6 +194,7 @@ export function App() {
       loadProject(project, name);
       setRecentProjects(rememberProject(projectFile(project), name, selected.path));
       setActiveProjectPath(selected.path);
+      setProtectedProjectPaths([]);
       setShowProjectStart(false);
       setCanReturnToEditor(false);
     } catch (error) {
@@ -190,13 +210,20 @@ export function App() {
   const startEmptyProject = () => {
     createEmptyProject();
     setActiveProjectPath(null);
+    setProtectedProjectPaths([]);
     setShowProjectStart(false);
     setCanReturnToEditor(false);
   };
 
   const startCharacterTemplate = () => {
-    createCharacterTemplateProject();
+    setShowTemplateSetup(true);
+  };
+
+  const createCharacterTemplate = (project: SerializableProject) => {
+    loadProject(project, 'Character template');
+    setShowTemplateSetup(false);
     setActiveProjectPath(null);
+    setProtectedProjectPaths([]);
     setShowProjectStart(false);
     setCanReturnToEditor(false);
   };
@@ -204,11 +231,12 @@ export function App() {
   return (
     <>
       <input ref={projectInputRef} type="file" accept="application/json,.json,.pixelrig.json" hidden onChange={(event) => { void openProjectFile(event.target.files); event.currentTarget.value = ''; }} />
+      {showTemplateSetup && <TemplateSetupDialog onCancel={() => setShowTemplateSetup(false)} onCreate={createCharacterTemplate} />}
       {showProjectStart ? (
         <ProjectStartScreen recentProjects={recentProjects} onOpenRecent={openRecent} onCreateEmpty={startEmptyProject} onCreateCharacter={startCharacterTemplate} onImport={requestOpenProject} onReturnToEditor={canReturnToEditor ? () => setShowProjectStart(false) : undefined} />
       ) : (
         <div className="app-shell" style={workspaceStyle}>
-          <Toolbar onNewProject={() => { setCanReturnToEditor(true); setShowProjectStart(true); }} onOpenProject={requestOpenProject} onSaveProject={saveProject} onOpenRecent={openRecent} onExport={() => setShowExport(true)} projectName={projectName} recentProjects={recentProjects} showGrid={showGrid} onToggleGrid={() => setShowGrid((value) => !value)} workspaceMode={workspaceMode} onWorkspaceModeChange={setWorkspaceMode} />
+          <Toolbar onNewProject={() => { setCanReturnToEditor(true); setShowProjectStart(true); }} onCopyProject={copyProject} onOpenProject={requestOpenProject} onSaveProject={saveProject} onOpenRecent={openRecent} onExport={() => setShowExport(true)} onCodex={() => setShowCodex((value) => !value)} projectName={projectName} recentProjects={recentProjects} showGrid={showGrid} onToggleGrid={() => setShowGrid((value) => !value)} workspaceMode={workspaceMode} onWorkspaceModeChange={setWorkspaceMode} />
           {workspaceMode === 'nodes' ? <div className="app-layout">
             <aside className="left-rail">
               <NodeHierarchy />
@@ -224,6 +252,7 @@ export function App() {
           <footer className="status-bar"><span><i /> Ready</span><span>Pixel-perfect preview</span><span>Project workflow & desktop build ready</span></footer>
           {editingAssetId && <PixelEditor assetId={editingAssetId} onClose={() => setEditingAssetId(null)} />}
           {showExport && <ExportDialog onClose={() => setShowExport(false)} />}
+          <CodexChat visible={showCodex} onClose={() => setShowCodex(false)} />
         </div>
       )}
     </>

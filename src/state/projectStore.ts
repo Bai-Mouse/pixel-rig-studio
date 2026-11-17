@@ -1,8 +1,10 @@
 import { create } from 'zustand';
-import { nodeSpriteIds, type AnimationFrame, type AnimationTemplate, type AssetId, type FrameGroup, type NodeFrameState, type NodeId, type ProjectSettings, type RigNode, type RotationSnapAngle, type SpriteAsset, type TransformTool, type TweenProperties, type Vec2 } from '../types/project';
+import { nodeSpriteIds, type AnimationFrame, type AnimationImportOptions, type AnimationTemplate, type AssetId, type FrameGroup, type NodeFrameState, type NodeId, type ProjectSettings, type RigNode, type RotationSnapAngle, type SpriteAsset, type TransformTool, type TweenProperties, type Vec2 } from '../types/project';
 import type { AnimationDataFile, SerializableProject } from '../export/projectSerializer';
 import { normalizeProjectSettings } from '../export/projectSerializer';
-import { createDemoProject } from './sampleProject';
+import { createCharacterTemplateProject as buildCharacterTemplate } from './characterTemplate';
+import { applyEditPlan, type EditPlan, type EditableScene } from '../codex/editPlan';
+import { clampAnchor, effectiveSpriteAnchor } from '../utils/spriteAnchor';
 
 type FrameStatePatch = Omit<Partial<NodeFrameState>, 'position' | 'scale'> & {
   position?: Partial<Vec2>;
@@ -29,15 +31,67 @@ interface PivotHistoryEntry {
   };
 }
 
-type HistoryEntry = TransformHistoryEntry | PivotHistoryEntry;
+interface NodeFramesHistoryEntry {
+  nodeId: NodeId;
+  frameIds?: string[];
+  frameStates: {
+    before: Array<NodeFrameState | null>;
+    after: Array<NodeFrameState | null>;
+  };
+}
+
+interface CodexHistoryEntry {
+  codexEditId: string;
+  label: string;
+  before: EditableScene;
+  after: EditableScene;
+}
+interface AssetHistoryEntry {
+  assetsBefore: Record<AssetId, SpriteAsset | null>;
+  assetsAfter: Record<AssetId, SpriteAsset | null>;
+}
+/** Re-anchoring keeps the drawn pixels in place, so the sprite edit and pose edit undo together. */
+interface AnchorHistoryEntry {
+  assetsBefore: Record<AssetId, SpriteAsset | null>;
+  assetsAfter: Record<AssetId, SpriteAsset | null>;
+  snapshots: {
+    before: Record<NodeId, PivotNodeSnapshot>;
+    after: Record<NodeId, PivotNodeSnapshot>;
+  };
+}
+/** Structural timeline edits (insert, duplicate, delete, move, grouping, import) undo as one frame-list snapshot. */
+interface TimelineSnapshot {
+  frames: AnimationFrame[];
+  currentFrameIndex: number;
+  fps: number;
+  isLooping: boolean;
+  selectedFrameIds: string[];
+}
+
+interface TimelineHistoryEntry {
+  timelineBefore: TimelineSnapshot;
+  timelineAfter: TimelineSnapshot;
+  label: string;
+}
+
+type HistoryEntry = TransformHistoryEntry | PivotHistoryEntry | NodeFramesHistoryEntry | CodexHistoryEntry | AssetHistoryEntry | AnchorHistoryEntry | TimelineHistoryEntry;
+
+function restoreAssets(current: Record<AssetId, SpriteAsset>, patch: Record<AssetId, SpriteAsset | null>) {
+  const result = { ...current };
+  for (const [id, asset] of Object.entries(patch)) { if (asset) result[id] = asset; else delete result[id]; }
+  return result;
+}
 
 interface TransformSession {
   nodeId: NodeId;
   frameIndex: number;
   before: NodeFrameState;
+  frameIds: string[];
+  frameStates: Array<NodeFrameState | null>;
 }
 
 interface ProjectState {
+  applyCodexPlan: (plan: EditPlan, expected: EditableScene & { assets: Record<AssetId, SpriteAsset>; settings: ProjectSettings }) => string;
   assets: Record<AssetId, SpriteAsset>;
   nodes: Record<NodeId, RigNode>;
   rootNodeIds: NodeId[];
@@ -46,6 +100,12 @@ interface ProjectState {
   projectName: string;
   frames: AnimationFrame[];
   currentFrameIndex: number;
+  selectedFrameIds: string[];
+  frameSelectionAnchorId: string | null;
+  inspectorSession: { nodeId: NodeId; frameIds: string[]; before: Array<NodeFrameState | null> } | null;
+  beginInspectorEdit: (nodeId: NodeId) => void;
+  updateInspectorFrame: (nodeId: NodeId, patch: FrameStatePatch) => void;
+  commitInspectorEdit: () => void;
   isPlaying: boolean;
   playbackGroupId: string | null;
   isLooping: boolean;
@@ -65,6 +125,10 @@ interface ProjectState {
   selectAssets: (ids: AssetId[], primaryId?: AssetId | null) => void;
   addAssets: (assets: SpriteAsset[]) => void;
   replaceAssets: (assets: SpriteAsset[]) => void;
+  /** Sets or clears the sprite-space anchor used to align this sprite with its node origin. */
+  setAssetAnchor: (assetId: AssetId, anchor: Vec2 | null) => void;
+  /** Re-anchors one sprite while offsetting the node pose so its drawn pixels stay in place. */
+  setAssetAnchorKeepingPixels: (assetId: AssetId, nodeId: NodeId, anchor: Vec2) => void;
   updateAssetSource: (id: AssetId, src: string, width: number, height: number) => void;
   deleteAsset: (id: AssetId) => void;
   createNodeForAsset: (assetId: AssetId) => void;
@@ -79,7 +143,7 @@ interface ProjectState {
   setNodeSortingOrder: (nodeId: NodeId, sortingOrder: number) => void;
   toggleNodeVisibility: (id: NodeId) => void;
   toggleNodeLock: (id: NodeId) => void;
-  selectFrame: (index: number) => void;
+  selectFrame: (index: number, mode?: 'single' | 'toggle' | 'range') => void;
   togglePlayback: () => void;
   advanceFrame: () => void;
   toggleLooping: () => void;
@@ -91,11 +155,15 @@ interface ProjectState {
   moveFrame: (fromIndex: number, toIndex: number) => void;
   insertTweenFrames: (startIndex: number, endIndex: number, count: number, properties: TweenProperties) => void;
   groupFrames: (frameIndexes: number[], name: string, color: string) => void;
+  /** Adds frames to an existing group instead of creating a new one. */
+  addFramesToGroup: (frameIndexes: number[], groupId: string) => void;
+  /** Removes exactly the given frames from whichever group they belong to; other members stay grouped. */
+  removeFramesFromGroup: (frameIndexes: number[]) => void;
   renameFrameGroup: (groupId: string, name: string, color: string) => void;
   ungroupFrames: (groupId: string) => void;
   updateCanvasFrame: (canvasData: string | undefined) => void;
   applyAnimationTemplate: (template: AnimationTemplate) => void;
-  loadAnimation: (animation: AnimationDataFile) => boolean;
+  loadAnimation: (animation: AnimationDataFile, options?: AnimationImportOptions) => boolean;
   setActiveTool: (tool: TransformTool) => void;
   toggleShowPivot: () => void;
   toggleSnap: () => void;
@@ -104,6 +172,7 @@ interface ProjectState {
   setRotationSnapAngle: (angle: RotationSnapAngle) => void;
   beginTransform: (nodeId: NodeId) => void;
   updateNodeFrame: (nodeId: NodeId, patch: FrameStatePatch) => void;
+  syncNodeFrameToAllFrames: (nodeId: NodeId) => void;
   commitTransform: () => void;
   resetNodeTransform: (nodeId: NodeId) => void;
   flipNode: (nodeId: NodeId, axis: 'horizontal' | 'vertical') => void;
@@ -118,7 +187,11 @@ interface ProjectState {
   setProjectName: (name: string) => void;
 }
 
-const demo = createDemoProject();
+/** Fields a timeline snapshot has to remember so Ctrl+Z can put the whole time axis back. */
+type TimelineTrackedState = Pick<ProjectState, 'frames' | 'currentFrameIndex' | 'fps' | 'isLooping' | 'selectedFrameIds' | 'transformHistory' | 'redoStack'>;
+type TimelineChange = Partial<Pick<ProjectState, 'frames' | 'currentFrameIndex' | 'fps' | 'isLooping' | 'selectedFrameIds'>>;
+
+const initialProject = buildCharacterTemplate();
 
 function snapshotNode(node: RigNode): NodeFrameState {
   return {
@@ -126,7 +199,7 @@ function snapshotNode(node: RigNode): NodeFrameState {
     rotation: node.transform.rotation,
     scale: { ...node.transform.scale },
     visible: node.visible,
-    imageIndex: 0,
+    imageIndex: Math.max(0, Math.round(node.defaultImageIndex ?? 0)),
     sortingOrder: node.sortingOrder ?? 0,
   };
 }
@@ -136,6 +209,15 @@ function createFrame(nodes: Record<NodeId, RigNode>): AnimationFrame {
     id: `frame-${crypto.randomUUID()}`,
     nodeStates: Object.fromEntries(Object.values(nodes).map((node) => [node.id, snapshotNode(node)])),
   };
+}
+
+/**
+ * A template can ship its own first frame (including sprite choices and sorting).
+ * Clone it so every project created from the template owns independent frame data.
+ */
+function initialFrames(nodes: Record<NodeId, RigNode>, templateFrames?: AnimationFrame[]): AnimationFrame[] {
+  const first = templateFrames?.[0];
+  return [first ? cloneFrame(first) : createFrame(nodes)];
 }
 
 function cloneFrame(frame: AnimationFrame): AnimationFrame {
@@ -156,6 +238,37 @@ function cloneFrameState(state: NodeFrameState): NodeFrameState {
   return { ...state, position: { ...state.position }, scale: { ...state.scale } };
 }
 
+/**
+ * Adds the change between two imported frames to an existing pose.
+ * Continuous values are relative (scale by ratio, rotation by angle, position by offset);
+ * discrete values only change when the imported animation changes them, so a pose that is
+ * not part of the animation stays untouched.
+ */
+function addPoseDelta(current: NodeFrameState, target: NodeFrameState, previous: NodeFrameState, spriteCount: number): NodeFrameState {
+  const scaledAxis = (currentValue: number, targetValue: number, previousValue: number) => (
+    Math.abs(previousValue) > 0.0001
+      ? currentValue * (targetValue / previousValue)
+      : currentValue + (targetValue - previousValue)
+  );
+  const lastSpriteIndex = Math.max(0, spriteCount - 1);
+  const imageIndex = Math.max(0, Math.round(current.imageIndex))
+    + Math.round(target.imageIndex - previous.imageIndex);
+  return {
+    position: {
+      x: current.position.x + target.position.x - previous.position.x,
+      y: current.position.y + target.position.y - previous.position.y,
+    },
+    rotation: current.rotation + target.rotation - previous.rotation,
+    scale: {
+      x: scaledAxis(current.scale.x, target.scale.x, previous.scale.x),
+      y: scaledAxis(current.scale.y, target.scale.y, previous.scale.y),
+    },
+    visible: target.visible === previous.visible ? current.visible : target.visible,
+    imageIndex: Math.min(lastSpriteIndex, imageIndex),
+    sortingOrder: current.sortingOrder + target.sortingOrder - previous.sortingOrder,
+  };
+}
+
 function cloneNodeTransform(transform: RigNode['transform']): RigNode['transform'] {
   return { ...transform, position: { ...transform.position }, scale: { ...transform.scale } };
 }
@@ -167,6 +280,21 @@ function mergeFrameState(state: NodeFrameState, patch: FrameStatePatch): NodeFra
     position: { ...state.position, ...patch.position },
     scale: { ...state.scale, ...patch.scale },
   };
+}
+
+/** Canvas gestures are relative to the reference frame, not absolute pose copies. */
+function relativeTransformPatch(base: NodeFrameState, reference: NodeFrameState, patch: FrameStatePatch): FrameStatePatch {
+  const result: FrameStatePatch = { ...patch };
+  if (patch.position) result.position = Object.fromEntries((['x', 'y'] as const)
+    .filter((axis) => patch.position![axis] !== undefined)
+    .map((axis) => [axis, base.position[axis] + patch.position![axis]! - reference.position[axis]]));
+  if (patch.rotation !== undefined) result.rotation = base.rotation + patch.rotation - reference.rotation;
+  if (patch.scale) result.scale = Object.fromEntries((['x', 'y'] as const)
+    .filter((axis) => patch.scale![axis] !== undefined)
+    .map((axis) => [axis, reference.scale[axis] !== 0
+      ? base.scale[axis] * patch.scale![axis]! / reference.scale[axis]
+      : base.scale[axis] + patch.scale![axis]! - reference.scale[axis]]));
+  return result;
 }
 
 function stateMatches(left: NodeFrameState, right: NodeFrameState) {
@@ -229,6 +357,27 @@ function withFrameNodeState(frames: AnimationFrame[], frameIndex: number, nodeId
   return frames.map((frame, index) => index === frameIndex
     ? { ...frame, nodeStates: { ...frame.nodeStates, [nodeId]: cloneFrameState(nodeState) } }
     : frame);
+}
+
+function restoreNodeFrameStates(frames: AnimationFrame[], nodeId: NodeId, frameStates: Array<NodeFrameState | null>, frameIds?: string[]) {
+  return frames.map((frame, index) => {
+    if (frameIds) index = frameIds.indexOf(frame.id);
+    if (index < 0) return frame;
+    if (index >= frameStates.length) return frame;
+    const nodeStates = { ...frame.nodeStates };
+    const nodeState = frameStates[index];
+    if (nodeState) nodeStates[nodeId] = cloneFrameState(nodeState);
+    else delete nodeStates[nodeId];
+    return { ...frame, nodeStates };
+  });
+}
+
+export function inspectorFrameIds(state: Pick<ProjectState, 'frames' | 'currentFrameIndex' | 'selectedFrameIds'>) {
+  const current = state.frames[state.currentFrameIndex];
+  if (!current) return [];
+  return state.selectedFrameIds.includes(current.id)
+    ? state.frames.filter((frame) => state.selectedFrameIds.includes(frame.id)).map((frame) => frame.id)
+    : [current.id];
 }
 
 function lerp(start: number, end: number, amount: number) {
@@ -370,6 +519,67 @@ function findLimbNode(nodes: Record<NodeId, RigNode>, side: 'left' | 'right', li
   });
 }
 
+/** Timeline-only state that must not survive a wholesale frame import. */
+function clearedTimelineState() {
+  return {
+    isPlaying: false,
+    playbackGroupId: null,
+    selectedFrameIds: [] as string[],
+    frameSelectionAnchorId: null,
+    inspectorSession: null,
+    transformSession: null,
+  };
+}
+
+const timelineHistoryLimit = 80;
+
+function timelineSnapshot(state: TimelineTrackedState): TimelineSnapshot {
+  return {
+    frames: state.frames,
+    currentFrameIndex: state.currentFrameIndex,
+    fps: state.fps,
+    isLooping: state.isLooping,
+    selectedFrameIds: state.selectedFrameIds,
+  };
+}
+
+/**
+ * Records one undo step for a structural frame edit.
+ * Frames are immutable, so the snapshots only keep references and no frame data is copied.
+ */
+function timelineHistory(state: TimelineTrackedState, next: TimelineChange, label: string) {
+  const before = timelineSnapshot(state);
+  const after: TimelineSnapshot = {
+    frames: next.frames ?? state.frames,
+    currentFrameIndex: next.currentFrameIndex ?? state.currentFrameIndex,
+    fps: next.fps ?? state.fps,
+    isLooping: next.isLooping ?? state.isLooping,
+    selectedFrameIds: next.selectedFrameIds ?? state.selectedFrameIds,
+  };
+  if (after.frames === before.frames
+    && after.currentFrameIndex === before.currentFrameIndex
+    && after.fps === before.fps
+    && after.isLooping === before.isLooping
+    && after.selectedFrameIds === before.selectedFrameIds) return {};
+  const entry: TimelineHistoryEntry = { timelineBefore: before, timelineAfter: after, label };
+  return {
+    transformHistory: [...state.transformHistory, entry].slice(-timelineHistoryLimit),
+    redoStack: [] as HistoryEntry[],
+  };
+}
+
+function restoreTimeline(snapshot: TimelineSnapshot) {
+  const frames = snapshot.frames;
+  return {
+    frames,
+    currentFrameIndex: Math.min(Math.max(0, frames.length - 1), Math.max(0, snapshot.currentFrameIndex)),
+    fps: snapshot.fps,
+    isLooping: snapshot.isLooping,
+    selectedFrameIds: snapshot.selectedFrameIds.filter((id) => frames.some((frame) => frame.id === id)),
+    frameSelectionAnchorId: null,
+  };
+}
+
 function framesForTemplate(state: Pick<ProjectState, 'nodes' | 'rootNodeIds' | 'frames' | 'currentFrameIndex'>, template: AnimationTemplate) {
   const baseFrame = state.frames[state.currentFrameIndex];
   const baseStates = Object.fromEntries(Object.values(state.nodes).map((node) => [node.id, cloneFrameState(baseFrame?.nodeStates[node.id] ?? snapshotNode(node))])) as Record<NodeId, NodeFrameState>;
@@ -400,9 +610,38 @@ function framesForTemplate(state: Pick<ProjectState, 'nodes' | 'rootNodeIds' | '
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
-  ...demo,
+  applyCodexPlan: (plan, expected) => {
+    const state = get();
+    if (state.nodes !== expected.nodes || state.frames !== expected.frames || state.assets !== expected.assets
+      || state.rootNodeIds !== expected.rootNodeIds || state.settings !== expected.settings
+      || state.fps !== expected.fps || state.isLooping !== expected.isLooping) {
+      throw new Error('项目已在生成方案后改变，请重新发送请求。');
+    }
+    if (!plan.operations.length) throw new Error('该回复没有需要应用的修改。');
+    state.commitInspectorEdit();
+    state.commitTransform();
+    const before: EditableScene = { nodes: state.nodes, rootNodeIds: state.rootNodeIds, frames: state.frames, fps: state.fps, isLooping: state.isLooping };
+    const after = applyEditPlan(before, plan, Object.keys(state.assets));
+    if (JSON.stringify(before) === JSON.stringify(after)) throw new Error('方案没有改变项目属性。');
+    const codexEditId = crypto.randomUUID();
+    const entry: CodexHistoryEntry = { codexEditId, label: plan.message, before, after };
+    const currentFrameId = state.frames[state.currentFrameIndex]?.id;
+    set((latest) => ({
+      ...after,
+      currentFrameIndex: Math.max(0, after.frames.findIndex((frame) => frame.id === currentFrameId)),
+      selectedFrameIds: latest.selectedFrameIds.filter((id) => after.frames.some((frame) => frame.id === id)),
+      selectedNodeId: latest.selectedNodeId && after.nodes[latest.selectedNodeId] ? latest.selectedNodeId : null,
+      transformHistory: [...latest.transformHistory, entry], redoStack: [],
+      transformSession: null, inspectorSession: null, isPlaying: false, playbackGroupId: null,
+    }));
+    return codexEditId;
+  },
+  ...initialProject,
   projectName: 'Untitled character',
-  frames: [createFrame(demo.nodes)],
+  selectedFrameIds: [],
+  frameSelectionAnchorId: null,
+  inspectorSession: null,
+  frames: initialFrames(initialProject.nodes, initialProject.frames),
   currentFrameIndex: 0,
   isPlaying: false,
   playbackGroupId: null,
@@ -428,7 +667,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         selectedAssetId: primaryId && selectedAssetIds.includes(primaryId) ? primaryId : selectedAssetIds[selectedAssetIds.length - 1] ?? null,
       };
     }),
-  addAssets: (newAssets) =>
+  addAssets: (newAssets) => {
+    if (!newAssets.length) return;
+    get().commitInspectorEdit(); get().commitTransform();
     set((state) => ({
       assets: {
         ...state.assets,
@@ -436,14 +677,84 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       },
       selectedAssetId: newAssets.length ? newAssets[newAssets.length - 1].id : state.selectedAssetId,
       selectedAssetIds: newAssets.length ? [newAssets[newAssets.length - 1].id] : state.selectedAssetIds,
-    })),
-  replaceAssets: (updatedAssets) =>
-    set((state) => ({
-      assets: {
-        ...state.assets,
-        ...Object.fromEntries(updatedAssets.filter((asset) => state.assets[asset.id]).map((asset) => [asset.id, asset])),
-      },
-    })),
+      transformHistory: [...state.transformHistory, {
+        assetsBefore: Object.fromEntries(newAssets.map((asset) => [asset.id, state.assets[asset.id] ?? null])),
+        assetsAfter: Object.fromEntries(newAssets.map((asset) => [asset.id, asset])),
+      }], redoStack: [],
+    }));
+  },
+  replaceAssets: (updatedAssets) => {
+    get().commitInspectorEdit(); get().commitTransform();
+    set((state) => {
+      const valid = updatedAssets.filter((asset) => state.assets[asset.id]);
+      if (!valid.length) return {};
+      const assetsAfter = Object.fromEntries(valid.map((asset) => [asset.id, asset]));
+      return { assets: { ...state.assets, ...assetsAfter }, transformHistory: [...state.transformHistory, {
+        assetsBefore: Object.fromEntries(valid.map((asset) => [asset.id, state.assets[asset.id]])), assetsAfter,
+      }], redoStack: [] };
+    });
+  },
+  setAssetAnchor: (assetId, anchor) => {
+    const asset = get().assets[assetId];
+    if (!asset) return;
+    const next: SpriteAsset = { ...asset };
+    if (anchor) next.anchor = clampAnchor(anchor, asset.width, asset.height);
+    else delete next.anchor;
+    get().replaceAssets([next]);
+  },
+  setAssetAnchorKeepingPixels: (assetId, nodeId, anchor) =>
+    set((state) => {
+      const asset = state.assets[assetId];
+      const node = state.nodes[nodeId];
+      if (!asset || !node || node.locked) return {};
+      const previousAnchor = effectiveSpriteAnchor(asset, node.pivot);
+      const nextAnchor = clampAnchor({ x: Math.round(anchor.x), y: Math.round(anchor.y) }, asset.width, asset.height);
+      const anchorDelta = { x: nextAnchor.x - previousAnchor.x, y: nextAnchor.y - previousAnchor.y };
+      if (!anchorDelta.x && !anchorDelta.y) return {};
+      const affectedNodeIds = [nodeId, ...node.children.filter((childId) => Boolean(state.nodes[childId]))];
+      const nextNodes: Record<NodeId, RigNode> = {
+        ...state.nodes,
+        [nodeId]: { ...node, transform: { ...node.transform, position: positionWithPivotCompensation(node.transform, anchorDelta) } },
+      };
+      node.children.forEach((childId) => {
+        const child = state.nodes[childId];
+        if (!child) return;
+        nextNodes[childId] = {
+          ...child,
+          transform: { ...child.transform, position: { x: child.transform.position.x - anchorDelta.x, y: child.transform.position.y - anchorDelta.y } },
+        };
+      });
+      const nextFrames = state.frames.map((frame) => {
+        const nodeState = frame.nodeStates[nodeId] ?? snapshotNode(node);
+        const nodeStates = {
+          ...frame.nodeStates,
+          [nodeId]: { ...nodeState, position: positionWithPivotCompensation(nodeState, anchorDelta) },
+        };
+        node.children.forEach((childId) => {
+          const child = state.nodes[childId];
+          if (!child) return;
+          const childState = frame.nodeStates[childId] ?? snapshotNode(child);
+          nodeStates[childId] = { ...childState, position: { x: childState.position.x - anchorDelta.x, y: childState.position.y - anchorDelta.y } };
+        });
+        return { ...frame, nodeStates };
+      });
+      const nextAsset: SpriteAsset = { ...asset, anchor: nextAnchor };
+      const historyEntry: AnchorHistoryEntry = {
+        assetsBefore: { [assetId]: asset },
+        assetsAfter: { [assetId]: nextAsset },
+        snapshots: {
+          before: capturePivotSnapshots(state.nodes, state.frames, affectedNodeIds),
+          after: capturePivotSnapshots(nextNodes, nextFrames, affectedNodeIds),
+        },
+      };
+      return {
+        assets: { ...state.assets, [assetId]: nextAsset },
+        nodes: nextNodes,
+        frames: nextFrames,
+        transformHistory: [...state.transformHistory, historyEntry],
+        redoStack: [],
+      };
+    }),
   updateAssetSource: (id, src, width, height) =>
     set((state) => {
       const asset = state.assets[id];
@@ -526,6 +837,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const nextIds = [...existing, ...validNewIds];
       const selectedIndex = nextIds.indexOf(validNewIds[validNewIds.length - 1]);
       const firstAsset = !existing.length ? state.assets[validNewIds[0]] : null;
+      const selectedFrames = new Set(inspectorFrameIds(state));
       return {
         nodes: {
           ...state.nodes,
@@ -536,7 +848,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             pivot: firstAsset ? { x: Math.floor(firstAsset.width / 2), y: Math.floor(firstAsset.height / 2) } : node.pivot,
           },
         },
-        frames: state.frames.map((frame, index) => index === state.currentFrameIndex
+        frames: state.frames.map((frame) => selectedFrames.has(frame.id)
           ? { ...frame, nodeStates: { ...frame.nodeStates, [nodeId]: { ...(frame.nodeStates[nodeId] ?? snapshotNode(node)), imageIndex: selectedIndex } } }
           : frame),
       };
@@ -558,20 +870,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         }),
       };
     }),
-  setNodeFrameSprite: (nodeId, imageIndex) =>
-    set((state) => {
+  setNodeFrameSprite: (nodeId, imageIndex) => {
+      const state = get();
       const node = state.nodes[nodeId];
-      const frame = state.frames[state.currentFrameIndex];
-      if (!node || !frame) return {};
+      if (!node || node.locked) return;
       const maxIndex = Math.max(0, nodeSpriteIds(node).length - 1);
       const nextIndex = Math.max(0, Math.min(maxIndex, Math.round(imageIndex)));
-      return {
-        frames: withFrameNodeState(state.frames, state.currentFrameIndex, nodeId, {
-          ...(frame.nodeStates[nodeId] ?? snapshotNode(node)),
-          imageIndex: nextIndex,
-        }),
-      };
-    }),
+      state.beginInspectorEdit(nodeId);
+      get().updateInspectorFrame(nodeId, { imageIndex: nextIndex });
+      get().commitInspectorEdit();
+  },
   renameNode: (nodeId, name) =>
     set((state) => {
       const node = state.nodes[nodeId];
@@ -644,19 +952,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       });
       return { nodes, rootNodeIds, frames };
     }),
-  setNodeSortingOrder: (nodeId, sortingOrder) =>
-    set((state) => {
-      const node = state.nodes[nodeId];
-      const frame = state.frames[state.currentFrameIndex];
-      if (!node || !frame) return {};
-      const nodeState = frame.nodeStates[nodeId] ?? snapshotNode(node);
-      return {
-        frames: withFrameNodeState(state.frames, state.currentFrameIndex, nodeId, {
-          ...nodeState,
-          sortingOrder: Number.isFinite(sortingOrder) ? Math.round(sortingOrder) : 0,
-        }),
-      };
-    }),
+  setNodeSortingOrder: (nodeId, sortingOrder) => {
+    get().beginInspectorEdit(nodeId);
+    get().updateInspectorFrame(nodeId, { sortingOrder: Number.isFinite(sortingOrder) ? Math.round(sortingOrder) : 0 });
+    get().commitInspectorEdit();
+  },
   toggleNodeVisibility: (id) =>
     set((state) => ({
       nodes: { ...state.nodes, [id]: { ...state.nodes[id], visible: !state.nodes[id].visible } },
@@ -665,17 +965,36 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set((state) => ({
       nodes: { ...state.nodes, [id]: { ...state.nodes[id], locked: !state.nodes[id].locked } },
     })),
-  selectFrame: (index) =>
-    set((state) => ({
-      currentFrameIndex: Math.min(Math.max(0, index), state.frames.length - 1),
-      isPlaying: false,
-      playbackGroupId: null,
-    })),
+  selectFrame: (index, mode = 'single') => {
+    get().commitInspectorEdit();
+    get().commitTransform();
+    set((state) => {
+      const target = state.frames[index];
+      if (!target) return {};
+      let ids = inspectorFrameIds(state);
+      if (mode === 'toggle') {
+        ids = ids.includes(target.id) ? ids.filter((id) => id !== target.id) : [...ids, target.id];
+        if (!ids.length) ids = [target.id];
+      } else if (mode === 'range') {
+        const anchor = state.frames.findIndex((frame) => frame.id === state.frameSelectionAnchorId);
+        const start = anchor < 0 ? state.currentFrameIndex : anchor;
+        ids = state.frames.slice(Math.min(start, index), Math.max(start, index) + 1).map((frame) => frame.id);
+      } else ids = [target.id];
+      return {
+        selectedFrameIds: ids,
+        frameSelectionAnchorId: mode === 'range' ? state.frameSelectionAnchorId : target.id,
+        currentFrameIndex: ids.includes(target.id) ? index : state.frames.findIndex((frame) => frame.id === ids[ids.length - 1]),
+        isPlaying: false,
+        playbackGroupId: null,
+      };
+    });
+  },
   togglePlayback: () =>
     set((state) => {
       if (state.isPlaying) return { isPlaying: false, playbackGroupId: null };
       return {
         isPlaying: true,
+        selectedFrameIds: [],
         playbackGroupId: state.frames[state.currentFrameIndex]?.group?.id ?? null,
       };
     }),
@@ -702,24 +1021,39 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const nextIndex = state.currentFrameIndex + 1;
       const frames = [...state.frames];
       frames.splice(nextIndex, 0, createFrame(state.nodes));
-      return { frames, currentFrameIndex: nextIndex, isPlaying: false };
+      const next = { frames, currentFrameIndex: nextIndex, isPlaying: false };
+      return { ...next, ...timelineHistory(state, next, 'Insert frame') };
     }),
   duplicateFrame: () =>
     set((state) => {
       const nextIndex = state.currentFrameIndex + 1;
       const frames = [...state.frames];
       frames.splice(nextIndex, 0, cloneFrame(frames[state.currentFrameIndex]));
-      return { frames, currentFrameIndex: nextIndex, isPlaying: false };
+      const next = { frames, currentFrameIndex: nextIndex, isPlaying: false };
+      return { ...next, ...timelineHistory(state, next, 'Duplicate frame') };
     }),
   deleteFrame: () =>
     set((state) => {
-      if (state.frames.length === 1) return { isPlaying: false };
-      const frames = state.frames.filter((_, index) => index !== state.currentFrameIndex);
-      return {
+      // A multi-frame selection deletes every selected frame; otherwise only the current one.
+      const doomed = new Set(inspectorFrameIds(state));
+      if (!doomed.size) return { isPlaying: false };
+      const frames = state.frames.filter((frame) => !doomed.has(frame.id));
+      // An animation needs at least one frame, so a selection covering the whole timeline is refused.
+      if (!frames.length) return { isPlaying: false };
+      const removedBeforeCurrent = state.frames
+        .slice(0, state.currentFrameIndex)
+        .filter((frame) => doomed.has(frame.id)).length;
+      const next = {
         frames,
-        currentFrameIndex: Math.min(state.currentFrameIndex, frames.length - 1),
+        currentFrameIndex: Math.min(frames.length - 1, Math.max(0, state.currentFrameIndex - removedBeforeCurrent)),
         isPlaying: false,
+        playbackGroupId: null,
+        selectedFrameIds: [] as string[],
+        frameSelectionAnchorId: null,
+        transformSession: null,
+        inspectorSession: null,
       };
+      return { ...next, ...timelineHistory(state, next, doomed.size > 1 ? `Delete ${doomed.size} frames` : 'Delete frame') };
     }),
   moveFrame: (fromIndex, toIndex) =>
     set((state) => {
@@ -727,7 +1061,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const frames = [...state.frames];
       const [movedFrame] = frames.splice(fromIndex, 1);
       frames.splice(toIndex, 0, movedFrame);
-      return { frames, currentFrameIndex: toIndex, isPlaying: false, transformSession: null };
+      const next = { frames, currentFrameIndex: toIndex, isPlaying: false, transformSession: null };
+      return { ...next, ...timelineHistory(state, next, 'Move frame') };
     }),
   insertTweenFrames: (firstIndex, secondIndex, requestedCount, properties) =>
     set((state) => {
@@ -750,7 +1085,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       });
       const frames = [...state.frames];
       frames.splice(startIndex + 1, 0, ...tweenFrames);
-      return { frames, currentFrameIndex: startIndex + 1, isPlaying: false, transformSession: null };
+      const next = { frames, currentFrameIndex: startIndex + 1, isPlaying: false, transformSession: null };
+      return { ...next, ...timelineHistory(state, next, `Insert ${count} in-between frame${count === 1 ? '' : 's'}`) };
     }),
   groupFrames: (frameIndexes, name, color) =>
     set((state) => {
@@ -761,25 +1097,58 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         name: name.trim() || 'Frame Group',
         color,
       };
-      return {
+      const next = {
         frames: state.frames.map((frame, index) => selected.has(index) ? { ...frame, group: { ...group } } : frame),
         isPlaying: false,
       };
+      return { ...next, ...timelineHistory(state, next, `Group ${selected.size} frame${selected.size === 1 ? '' : 's'}`) };
+    }),
+  addFramesToGroup: (frameIndexes, groupId) =>
+    set((state) => {
+      const selected = new Set(frameIndexes.filter((index) => index >= 0 && index < state.frames.length));
+      const group = state.frames.find((frame) => frame.group?.id === groupId)?.group;
+      if (!selected.size || !group) return {};
+      const next = {
+        frames: state.frames.map((frame, index) => selected.has(index) ? { ...frame, group: { ...group } } : frame),
+        isPlaying: false,
+      };
+      return { ...next, ...timelineHistory(state, next, `Add ${selected.size} frame${selected.size === 1 ? '' : 's'} to “${group.name}”`) };
+    }),
+  removeFramesFromGroup: (frameIndexes) =>
+    set((state) => {
+      const selected = new Set(frameIndexes.filter((index) => index >= 0 && index < state.frames.length));
+      const affected = state.frames.filter((frame, index) => selected.has(index) && frame.group).length;
+      if (!affected) return {};
+      const next = {
+        frames: state.frames.map((frame, index) => {
+          if (!selected.has(index) || !frame.group) return frame;
+          const { group: _, ...ungrouped } = frame;
+          return ungrouped;
+        }),
+        isPlaying: false,
+      };
+      return { ...next, ...timelineHistory(state, next, `Remove ${affected} frame${affected === 1 ? '' : 's'} from group`) };
     }),
   renameFrameGroup: (groupId, name, color) =>
-    set((state) => ({
-      frames: state.frames.map((frame) => frame.group?.id === groupId
-        ? { ...frame, group: { id: groupId, name: name.trim() || 'Frame Group', color } }
-        : frame),
-    })),
+    set((state) => {
+      const next = {
+        frames: state.frames.map((frame) => frame.group?.id === groupId
+          ? { ...frame, group: { id: groupId, name: name.trim() || 'Frame Group', color } }
+          : frame),
+      };
+      return { ...next, ...timelineHistory(state, next, 'Edit frame group') };
+    }),
   ungroupFrames: (groupId) =>
-    set((state) => ({
-      frames: state.frames.map((frame) => {
-        if (frame.group?.id !== groupId) return frame;
-        const { group: _, ...ungrouped } = frame;
-        return ungrouped;
-      }),
-    })),
+    set((state) => {
+      const next = {
+        frames: state.frames.map((frame) => {
+          if (frame.group?.id !== groupId) return frame;
+          const { group: _, ...ungrouped } = frame;
+          return ungrouped;
+        }),
+      };
+      return { ...next, ...timelineHistory(state, next, 'Ungroup frames') };
+    }),
   updateCanvasFrame: (canvasData) =>
     set((state) => ({
       frames: state.frames.map((frame, index) => index === state.currentFrameIndex ? { ...frame, canvasData } : frame),
@@ -790,18 +1159,19 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const nextIndex = state.currentFrameIndex + 1;
       const frames = [...state.frames];
       frames.splice(nextIndex, 0, ...framesForTemplate(state, template));
-      return {
+      const next = {
         frames,
         currentFrameIndex: nextIndex,
         isPlaying: false,
         transformSession: null,
       };
+      return { ...next, ...timelineHistory(state, next, `Add ${template} template frames`) };
     }),
-  loadAnimation: (animation) => {
+  loadAnimation: (animation, options) => {
     const state = get();
     const matchedNodeIds = Object.keys(state.nodes).filter((nodeId) => animation.frames.some((frame) => Boolean(frame.nodeStates[nodeId])));
     if (!matchedNodeIds.length) return false;
-    const frames = animation.frames.map((frame) => ({
+    const importedFrames = animation.frames.map((frame) => ({
       id: `frame-${crypto.randomUUID()}`,
       canvasData: frame.canvasData,
       group: frame.group ? { ...frame.group } : undefined,
@@ -810,17 +1180,64 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         cloneFrameState(frame.nodeStates[node.id] ?? snapshotNode(node)),
       ])) as Record<NodeId, NodeFrameState>,
     }));
-    set({
-      frames,
+    const mode = options?.mode ?? 'replace';
+    const startIndex = Math.max(0, Math.min(state.frames.length, Math.round(options?.startIndex ?? state.currentFrameIndex)));
+    if (mode === 'insert') {
+      const frames = [...state.frames];
+      frames.splice(startIndex, 0, ...importedFrames);
+      const next = { ...clearedTimelineState(), frames, currentFrameIndex: startIndex };
+      set({ ...next, ...timelineHistory(state, next, `Import ${importedFrames.length} animation frames`) });
+      return true;
+    }
+    if (mode === 'delta') {
+      const baseFrame = state.frames[startIndex];
+      if (!baseFrame) return false;
+      const frames = [...state.frames];
+      let previousStates = baseFrame.nodeStates;
+      importedFrames.forEach((frame, offset) => {
+        const previousSourceStates = offset === 0 ? frame.nodeStates : importedFrames[offset - 1].nodeStates;
+        const nodeStates = Object.fromEntries(Object.values(state.nodes).map((node) => {
+          const current = previousStates[node.id] ?? snapshotNode(node);
+          return [node.id, addPoseDelta(
+            current,
+            frame.nodeStates[node.id] ?? snapshotNode(node),
+            previousSourceStates[node.id] ?? snapshotNode(node),
+            nodeSpriteIds(node).length,
+          )];
+        })) as Record<NodeId, NodeFrameState>;
+        const index = startIndex + offset;
+        const existing = frames[index];
+        // Keep the original frame id, group and drawing layer: only the pose accumulates.
+        frames[index] = existing
+          ? { ...existing, nodeStates }
+          : { id: `frame-${crypto.randomUUID()}`, nodeStates };
+        previousStates = nodeStates;
+      });
+      const next = { ...clearedTimelineState(), frames, currentFrameIndex: startIndex };
+      set({ ...next, ...timelineHistory(state, next, `Apply ${importedFrames.length} animation deltas`) });
+      return true;
+    }
+    if (mode === 'overwrite') {
+      const frames = [...state.frames];
+      importedFrames.forEach((frame, offset) => {
+        const existing = frames[startIndex + offset];
+        // Keep the original frame id and group so selections and grouping survive the paste.
+        frames[startIndex + offset] = existing
+          ? { ...existing, canvasData: frame.canvasData, nodeStates: frame.nodeStates }
+          : frame;
+      });
+      const next = { ...clearedTimelineState(), frames, currentFrameIndex: startIndex };
+      set({ ...next, ...timelineHistory(state, next, `Overwrite ${importedFrames.length} animation frames`) });
+      return true;
+    }
+    const next = {
+      ...clearedTimelineState(),
+      frames: importedFrames,
       currentFrameIndex: 0,
-      isPlaying: false,
-      playbackGroupId: null,
       isLooping: animation.loop,
       fps: animation.fps,
-      transformSession: null,
-      transformHistory: [],
-      redoStack: [],
-    });
+    };
+    set({ ...next, ...timelineHistory(state, next, 'Replace timeline with imported animation') });
     return true;
   },
   setActiveTool: (activeTool) => set({ activeTool }),
@@ -835,78 +1252,167 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   setRotationSnapAngle: (rotationSnapAngle) => set((state) => ({
     settings: { ...state.settings, rotationSnapAngle },
   })),
-  beginTransform: (nodeId) =>
+  beginTransform: (nodeId) => {
+    get().commitInspectorEdit();
+    get().commitTransform();
     set((state) => {
       const node = state.nodes[nodeId];
       const frame = state.frames[state.currentFrameIndex];
       if (!node || node.locked || !frame) return {};
       const before = frame.nodeStates[nodeId] ?? snapshotNode(node);
-      const frames = frame.nodeStates[nodeId]
-        ? state.frames
-        : withFrameNodeState(state.frames, state.currentFrameIndex, nodeId, before);
+      const frameIds = inspectorFrameIds(state);
       return {
-        frames,
-        transformSession: { nodeId, frameIndex: state.currentFrameIndex, before: cloneFrameState(before) },
+        transformSession: { nodeId, frameIndex: state.currentFrameIndex, before: cloneFrameState(before), frameIds,
+          frameStates: frameIds.map((id) => {
+            const value = state.frames.find((item) => item.id === id)?.nodeStates[nodeId];
+            return value ? cloneFrameState(value) : null;
+          }) },
+        isPlaying: false, playbackGroupId: null,
       };
-    }),
-  updateNodeFrame: (nodeId, patch) =>
+    });
+  },
+  updateNodeFrame: (nodeId, patch) => {
+    if (get().transformSession?.nodeId !== nodeId) get().beginTransform(nodeId);
     set((state) => {
       const node = state.nodes[nodeId];
-      const frame = state.frames[state.currentFrameIndex];
-      if (!node || node.locked || !frame) return {};
-      const current = frame.nodeStates[nodeId] ?? snapshotNode(node);
+      const session = state.transformSession;
+      if (!node || node.locked || !session || session.nodeId !== nodeId) return {};
       const angleIncrement = state.settings.rotationSnapAngle;
       const snappedPatch = patch.rotation !== undefined && angleIncrement > 0
         ? { ...patch, rotation: Math.round(patch.rotation / angleIncrement) * angleIncrement }
         : patch;
-      return { frames: withFrameNodeState(state.frames, state.currentFrameIndex, nodeId, mergeFrameState(current, snappedPatch)) };
+      return { frames: state.frames.map((frame) => {
+        const index = session.frameIds.indexOf(frame.id);
+        if (index < 0) return frame;
+        const base = session.frameStates[index] ?? snapshotNode(node);
+        const current = frame.nodeStates[nodeId] ?? snapshotNode(node);
+        return { ...frame, nodeStates: { ...frame.nodeStates, [nodeId]: mergeFrameState(current, relativeTransformPatch(base, session.before, snappedPatch)) } };
+      }) };
+    });
+  },
+  beginInspectorEdit: (nodeId) => {
+    get().commitTransform();
+    get().commitInspectorEdit();
+    set((state) => {
+      if (!state.nodes[nodeId] || state.nodes[nodeId].locked) return {};
+      const frameIds = inspectorFrameIds(state);
+      return {
+        inspectorSession: {
+          nodeId, frameIds,
+          before: frameIds.map((id) => {
+            const value = state.frames.find((frame) => frame.id === id)?.nodeStates[nodeId];
+            return value ? cloneFrameState(value) : null;
+          }),
+        },
+        isPlaying: false, playbackGroupId: null,
+      };
+    });
+  },
+  updateInspectorFrame: (nodeId, patch) => {
+    if (get().inspectorSession?.nodeId !== nodeId) get().beginInspectorEdit(nodeId);
+    set((state) => {
+      const node = state.nodes[nodeId];
+      const session = state.inspectorSession;
+      if (!node || node.locked || !session || session.nodeId !== nodeId) return {};
+      const angle = state.settings.rotationSnapAngle;
+      const adjusted = patch.rotation !== undefined && angle > 0
+        ? { ...patch, rotation: Math.round(patch.rotation / angle) * angle } : patch;
+      return {
+        frames: state.frames.map((frame) => session.frameIds.includes(frame.id)
+          ? { ...frame, nodeStates: { ...frame.nodeStates, [nodeId]: mergeFrameState(frame.nodeStates[nodeId] ?? snapshotNode(node), adjusted) } }
+          : frame),
+      };
+    });
+  },
+  commitInspectorEdit: () => set((state) => {
+    const session = state.inspectorSession;
+    if (!session) return {};
+    const after = session.frameIds.map((id) => {
+      const value = state.frames.find((frame) => frame.id === id)?.nodeStates[session.nodeId];
+      return value ? cloneFrameState(value) : null;
+    });
+    if (after.every((value, index) => value && session.before[index]
+      ? stateMatches(value, session.before[index]!) : value === session.before[index])) return { inspectorSession: null };
+    const entry: NodeFramesHistoryEntry = { nodeId: session.nodeId, frameIds: session.frameIds, frameStates: { before: session.before, after } };
+    return { inspectorSession: null, transformHistory: [...state.transformHistory, entry], redoStack: [] };
+  }),
+  syncNodeFrameToAllFrames: (nodeId) =>
+    set((state) => {
+      const node = state.nodes[nodeId];
+      const frame = state.frames[state.currentFrameIndex];
+      if (!node || node.locked || !frame || state.frames.length < 2) return {};
+      const sourceState = cloneFrameState(frame.nodeStates[nodeId] ?? snapshotNode(node));
+      const before = state.frames.map((item) => item.nodeStates[nodeId] ? cloneFrameState(item.nodeStates[nodeId]) : null);
+      if (before.every((item) => item && stateMatches(item, sourceState))) return {};
+      const frames = state.frames.map((item) => ({
+        ...item,
+        nodeStates: { ...item.nodeStates, [nodeId]: cloneFrameState(sourceState) },
+      }));
+      const entry: NodeFramesHistoryEntry = {
+        nodeId,
+        frameStates: {
+          before,
+          after: frames.map((item) => cloneFrameState(item.nodeStates[nodeId])),
+        },
+      };
+      return {
+        frames,
+        isPlaying: false,
+        playbackGroupId: null,
+        transformSession: null,
+        transformHistory: [...state.transformHistory, entry],
+        redoStack: [],
+      };
     }),
   commitTransform: () =>
     set((state) => {
       const session = state.transformSession;
       if (!session) return {};
-      const node = state.nodes[session.nodeId];
-      const frame = state.frames[session.frameIndex];
-      const after = node && frame ? frame.nodeStates[session.nodeId] ?? snapshotNode(node) : session.before;
-      if (stateMatches(session.before, after)) return { transformSession: null };
-      const entry: TransformHistoryEntry = { ...session, before: cloneFrameState(session.before), after: cloneFrameState(after) };
+      const after = session.frameIds.map((id) => {
+        const value = state.frames.find((frame) => frame.id === id)?.nodeStates[session.nodeId];
+        return value ? cloneFrameState(value) : null;
+      });
+      if (after.every((value, index) => value && session.frameStates[index]
+        ? stateMatches(value, session.frameStates[index]!) : value === session.frameStates[index])) return { transformSession: null };
+      const entry: NodeFramesHistoryEntry = { nodeId: session.nodeId, frameIds: session.frameIds, frameStates: { before: session.frameStates, after } };
       return {
         transformSession: null,
-        transformHistory: [...state.transformHistory.slice(-39), entry],
+        transformHistory: [...state.transformHistory, entry],
         redoStack: [],
       };
     }),
-  resetNodeTransform: (nodeId) =>
+  resetNodeTransform: (nodeId) => {
+    get().commitInspectorEdit(); get().commitTransform();
+    get().beginInspectorEdit(nodeId);
     set((state) => {
       const node = state.nodes[nodeId];
-      const frame = state.frames[state.currentFrameIndex];
-      if (!node || node.locked || !frame) return {};
-      const before = frame.nodeStates[nodeId] ?? snapshotNode(node);
-      const after: NodeFrameState = { ...snapshotNode(node), visible: before.visible, imageIndex: before.imageIndex, sortingOrder: before.sortingOrder };
-      if (stateMatches(before, after)) return {};
-      const entry: TransformHistoryEntry = { nodeId, frameIndex: state.currentFrameIndex, before: cloneFrameState(before), after: cloneFrameState(after) };
-      return {
-        frames: withFrameNodeState(state.frames, state.currentFrameIndex, nodeId, after),
-        transformHistory: [...state.transformHistory.slice(-39), entry],
-        redoStack: [],
-      };
-    }),
-  flipNode: (nodeId, axis) =>
+      const session = state.inspectorSession;
+      if (!node || node.locked || !session || session.nodeId !== nodeId) return {};
+      // Reset restores the exact default, even when rotation snapping is enabled.
+      return { frames: state.frames.map((frame) => session.frameIds.includes(frame.id)
+        ? { ...frame, nodeStates: { ...frame.nodeStates, [nodeId]: mergeFrameState(frame.nodeStates[nodeId] ?? snapshotNode(node), node.transform) } }
+        : frame) };
+    });
+    get().commitInspectorEdit();
+  },
+  flipNode: (nodeId, axis) => {
+    get().commitTransform(); get().commitInspectorEdit();
+    get().beginInspectorEdit(nodeId);
     set((state) => {
       const node = state.nodes[nodeId];
-      const frame = state.frames[state.currentFrameIndex];
-      if (!node || node.locked || !frame) return {};
-      const before = frame.nodeStates[nodeId] ?? snapshotNode(node);
-      const after = mergeFrameState(before, axis === 'horizontal'
-        ? { scale: { x: -before.scale.x } }
-        : { scale: { y: -before.scale.y } });
-      const entry: TransformHistoryEntry = { nodeId, frameIndex: state.currentFrameIndex, before: cloneFrameState(before), after: cloneFrameState(after) };
+      const session = state.inspectorSession;
+      if (!node || node.locked || !session || session.nodeId !== nodeId) return {};
       return {
-        frames: withFrameNodeState(state.frames, state.currentFrameIndex, nodeId, after),
-        transformHistory: [...state.transformHistory.slice(-39), entry],
-        redoStack: [],
+        frames: state.frames.map((frame) => {
+          if (!session.frameIds.includes(frame.id)) return frame;
+          const before = frame.nodeStates[nodeId] ?? snapshotNode(node);
+          const after = mergeFrameState(before, axis === 'horizontal' ? { scale: { x: -before.scale.x } } : { scale: { y: -before.scale.y } });
+          return { ...frame, nodeStates: { ...frame.nodeStates, [nodeId]: after } };
+        }),
       };
-    }),
+    });
+    get().commitInspectorEdit();
+  },
   updateNodePivot: (nodeId, pivot) =>
     set((state) => {
       const node = state.nodes[nodeId];
@@ -963,7 +1469,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       return {
         nodes: nextNodes,
         frames: nextFrames,
-        transformHistory: [...state.transformHistory.slice(-39), historyEntry],
+        transformHistory: [...state.transformHistory, historyEntry],
         redoStack: [],
       };
     }),
@@ -1012,10 +1518,72 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set((state) => {
       const entry = state.transformHistory[state.transformHistory.length - 1];
       if (!entry) return {};
+      if ('timelineBefore' in entry) {
+        return {
+          ...restoreTimeline(entry.timelineBefore),
+          transformHistory: state.transformHistory.slice(0, -1),
+          redoStack: [...state.redoStack, entry],
+          transformSession: null,
+          inspectorSession: null,
+          isPlaying: false,
+          playbackGroupId: null,
+        };
+      }
+      if ('assetsBefore' in entry && 'snapshots' in entry) {
+        const assets = restoreAssets(state.assets, entry.assetsBefore);
+        const restored = restorePivotSnapshots(state.nodes, state.frames, entry.snapshots.before);
+        return {
+          ...restored,
+          assets,
+          selectedAssetId: state.selectedAssetId && assets[state.selectedAssetId] ? state.selectedAssetId : null,
+          selectedAssetIds: state.selectedAssetIds.filter((id) => assets[id]),
+          transformHistory: state.transformHistory.slice(0, -1),
+          redoStack: [...state.redoStack, entry],
+          transformSession: null,
+          inspectorSession: null,
+        };
+      }
+      if ('assetsBefore' in entry) {
+        const assets = restoreAssets(state.assets, entry.assetsBefore);
+        return { assets, selectedAssetId: state.selectedAssetId && assets[state.selectedAssetId] ? state.selectedAssetId : null,
+          selectedAssetIds: state.selectedAssetIds.filter((id) => assets[id]), transformHistory: state.transformHistory.slice(0, -1), redoStack: [...state.redoStack, entry], transformSession: null, inspectorSession: null };
+      }
+      if ('codexEditId' in entry) {
+        const current: EditableScene = { nodes: state.nodes, rootNodeIds: state.rootNodeIds, frames: state.frames, fps: state.fps, isLooping: state.isLooping };
+        // Existing tools that do not create history can still change the scene after an AI edit.
+        // Preserve those edits as a separate redo checkpoint instead of losing them.
+        if (JSON.stringify(current) !== JSON.stringify(entry.after)) {
+          const checkpoint: CodexHistoryEntry = { codexEditId: crypto.randomUUID(), label: '后续手动编辑', before: entry.after, after: current };
+          return {
+            ...entry.after,
+            currentFrameIndex: Math.min(state.currentFrameIndex, entry.after.frames.length - 1),
+            selectedFrameIds: [], selectedNodeId: state.selectedNodeId && entry.after.nodes[state.selectedNodeId] ? state.selectedNodeId : null,
+            redoStack: [...state.redoStack, checkpoint],
+            transformSession: null, inspectorSession: null, isPlaying: false, playbackGroupId: null,
+          };
+        }
+        return {
+          ...entry.before,
+          currentFrameIndex: Math.min(state.currentFrameIndex, entry.before.frames.length - 1),
+          selectedFrameIds: state.selectedFrameIds.filter((id) => entry.before.frames.some((frame) => frame.id === id)),
+          selectedNodeId: state.selectedNodeId && entry.before.nodes[state.selectedNodeId] ? state.selectedNodeId : null,
+          transformHistory: state.transformHistory.slice(0, -1), redoStack: [...state.redoStack, entry],
+          transformSession: null, inspectorSession: null, isPlaying: false, playbackGroupId: null,
+        };
+      }
       if ('snapshots' in entry) {
         const restored = restorePivotSnapshots(state.nodes, state.frames, entry.snapshots.before);
         return {
           ...restored,
+          transformHistory: state.transformHistory.slice(0, -1),
+          redoStack: [...state.redoStack, entry],
+          transformSession: null,
+        };
+      }
+      if ('frameStates' in entry) {
+        if (!state.nodes[entry.nodeId]) return {};
+        return {
+          frames: restoreNodeFrameStates(state.frames, entry.nodeId, entry.frameStates.before, entry.frameIds),
           transformHistory: state.transformHistory.slice(0, -1),
           redoStack: [...state.redoStack, entry],
           transformSession: null,
@@ -1033,10 +1601,57 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set((state) => {
       const entry = state.redoStack[state.redoStack.length - 1];
       if (!entry) return {};
+      if ('timelineBefore' in entry) {
+        return {
+          ...restoreTimeline(entry.timelineAfter),
+          transformHistory: [...state.transformHistory, entry],
+          redoStack: state.redoStack.slice(0, -1),
+          transformSession: null,
+          inspectorSession: null,
+          isPlaying: false,
+          playbackGroupId: null,
+        };
+      }
+      if ('assetsBefore' in entry && 'snapshots' in entry) {
+        const assets = restoreAssets(state.assets, entry.assetsAfter);
+        const restored = restorePivotSnapshots(state.nodes, state.frames, entry.snapshots.after);
+        return {
+          ...restored,
+          assets,
+          selectedAssetId: state.selectedAssetId && assets[state.selectedAssetId] ? state.selectedAssetId : null,
+          selectedAssetIds: state.selectedAssetIds.filter((id) => assets[id]),
+          transformHistory: [...state.transformHistory, entry],
+          redoStack: state.redoStack.slice(0, -1),
+          transformSession: null,
+          inspectorSession: null,
+        };
+      }
+      if ('assetsAfter' in entry) {
+        return { assets: restoreAssets(state.assets, entry.assetsAfter), transformHistory: [...state.transformHistory, entry], redoStack: state.redoStack.slice(0, -1), transformSession: null, inspectorSession: null };
+      }
+      if ('codexEditId' in entry) {
+        return {
+          ...entry.after,
+          currentFrameIndex: Math.min(state.currentFrameIndex, entry.after.frames.length - 1),
+          selectedFrameIds: state.selectedFrameIds.filter((id) => entry.after.frames.some((frame) => frame.id === id)),
+          selectedNodeId: state.selectedNodeId && entry.after.nodes[state.selectedNodeId] ? state.selectedNodeId : null,
+          transformHistory: [...state.transformHistory, entry], redoStack: state.redoStack.slice(0, -1),
+          transformSession: null, inspectorSession: null, isPlaying: false, playbackGroupId: null,
+        };
+      }
       if ('snapshots' in entry) {
         const restored = restorePivotSnapshots(state.nodes, state.frames, entry.snapshots.after);
         return {
           ...restored,
+          transformHistory: [...state.transformHistory, entry],
+          redoStack: state.redoStack.slice(0, -1),
+          transformSession: null,
+        };
+      }
+      if ('frameStates' in entry) {
+        if (!state.nodes[entry.nodeId]) return {};
+        return {
+          frames: restoreNodeFrameStates(state.frames, entry.nodeId, entry.frameStates.after, entry.frameIds),
           transformHistory: [...state.transformHistory, entry],
           redoStack: state.redoStack.slice(0, -1),
           transformSession: null,
@@ -1065,6 +1680,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         rotationSnapAngle: 0,
       },
       projectName: 'Untitled project',
+      selectedFrameIds: [],
+      frameSelectionAnchorId: null,
+      inspectorSession: null,
       frames: [createFrame(nodes)],
       currentFrameIndex: 0,
       isPlaying: false,
@@ -1084,11 +1702,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     });
   },
   createCharacterTemplateProject: () => {
-    const template = createDemoProject();
+    const template = buildCharacterTemplate();
     set({
       ...template,
       projectName: 'Character template',
-      frames: [createFrame(template.nodes)],
+      selectedFrameIds: [],
+      frameSelectionAnchorId: null,
+      inspectorSession: null,
+      frames: initialFrames(template.nodes, template.frames),
       currentFrameIndex: 0,
       isPlaying: false,
       playbackGroupId: null,
@@ -1118,6 +1739,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       isPlaying: false,
       playbackGroupId: null,
       isLooping: project.isLooping,
+      selectedFrameIds: [],
+      frameSelectionAnchorId: null,
+      inspectorSession: null,
       onionSkinEnabled: false,
       fps: project.fps,
       selectedNodeId: project.rootNodeIds[0] ?? null,

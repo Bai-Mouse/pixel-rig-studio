@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
-import { useProjectStore } from '../state/projectStore';
+import { inspectorFrameIds, useProjectStore } from '../state/projectStore';
 import { nodeSpriteIdForFrame, type AnimationFrame, type NodeFrameState, type RigNode, type SpriteAsset, type TransformTool, type Vec2 } from '../types/project';
 import { DEFAULT_PIXEL_ALPHA_THRESHOLD, snapToGrid } from './pixelRotation';
 import { spriteRasterCache } from './spriteRasterCache';
+import { rotationDragDelta } from './rotationDrag';
+import { effectiveSpriteAnchor } from '../utils/spriteAnchor';
 
 const imageCache = new Map<string, HTMLImageElement>();
 let drawingPreview: { source: string; image: HTMLImageElement } | null = null;
@@ -24,8 +26,8 @@ interface TransformDrag {
   parentMatrix: Matrix;
   nodeMatrix: Matrix;
   startState: NodeFrameState;
-  center: Vec2;
-  startAngle: number;
+  rotationLastPoint: Vec2;
+  rotationDegrees: number;
   startScaleAxes: Vec2;
 }
 
@@ -65,10 +67,6 @@ function multiplyMatrices(parent: Matrix, child: Matrix): Matrix {
     e: parent.a * child.e + parent.c * child.f + parent.e,
     f: parent.b * child.e + parent.d * child.f + parent.f,
   };
-}
-
-function transformPoint(matrix: Matrix, point: Vec2): Vec2 {
-  return { x: matrix.a * point.x + matrix.c * point.y + matrix.e, y: matrix.b * point.x + matrix.d * point.y + matrix.f };
 }
 
 function inverseTransformPoint(matrix: Matrix, point: Vec2): Vec2 | null {
@@ -180,6 +178,7 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
   const selectedNodeId = useProjectStore((state) => state.selectedNodeId);
   const frames = useProjectStore((state) => state.frames);
   const currentFrameIndex = useProjectStore((state) => state.currentFrameIndex);
+  const selectedFrameCount = useProjectStore((state) => inspectorFrameIds(state).length);
   const onionSkinEnabled = useProjectStore((state) => state.onionSkinEnabled);
   const activeTool = useProjectStore((state) => state.activeTool);
   const showPivot = useProjectStore((state) => state.showPivot);
@@ -190,6 +189,7 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
   const updateNodeFrame = useProjectStore((state) => state.updateNodeFrame);
   const commitTransform = useProjectStore((state) => state.commitTransform);
   const updateNodePivot = useProjectStore((state) => state.updateNodePivot);
+  const setAssetAnchorKeepingPixels = useProjectStore((state) => state.setAssetAnchorKeepingPixels);
   const duplicateNode = useProjectStore((state) => state.duplicateNode);
   const deleteNode = useProjectStore((state) => state.deleteNode);
   const undoTransform = useProjectStore((state) => state.undoTransform);
@@ -234,6 +234,7 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
       const assetId = nodeSpriteIdForFrame(node, nodeState);
       const asset: SpriteAsset | undefined = assetId ? assets[assetId] : undefined;
       if (asset) {
+        const anchor = effectiveSpriteAnchor(asset, node.pivot);
         const image = getImage(asset.src, render);
         if (image.complete && image.naturalWidth) {
           const anchorX = snapToGrid(worldMatrix.e, settings.pixelGridSize);
@@ -244,7 +245,7 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
             context.transform(worldMatrix.a, worldMatrix.b, worldMatrix.c, worldMatrix.d, translationX, translationY);
             context.strokeStyle = '#9ea9ff';
             context.lineWidth = 1 / zoom;
-            if (drawBounds) context.strokeRect(-node.pivot.x - 2 / zoom, -node.pivot.y - 2 / zoom, asset.width + 4 / zoom, asset.height + 4 / zoom);
+            if (drawBounds) context.strokeRect(-anchor.x - 2 / zoom, -anchor.y - 2 / zoom, asset.width + 4 / zoom, asset.height + 4 / zoom);
             if (showPivot || activeTool === 'pivot') {
               context.strokeStyle = activeTool === 'pivot' ? '#ffc578' : '#aeb7ff';
               context.beginPath();
@@ -256,16 +257,16 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
               context.stroke();
             }
             if (activeTool === 'rotate') {
-              const handleY = -node.pivot.y - 10 / zoom;
+              const handleY = -anchor.y - 10 / zoom;
               context.beginPath();
-              context.moveTo(0, -node.pivot.y); context.lineTo(0, handleY);
+              context.moveTo(0, -anchor.y); context.lineTo(0, handleY);
               context.stroke();
               context.fillStyle = '#ffa96f';
               context.fillRect(-2 / zoom, handleY - 2 / zoom, 4 / zoom, 4 / zoom);
             }
             if (activeTool === 'scale') {
-              const handleX = asset.width - node.pivot.x + 4 / zoom;
-              const handleY = asset.height - node.pivot.y + 4 / zoom;
+              const handleX = asset.width - anchor.x + 4 / zoom;
+              const handleY = asset.height - anchor.y + 4 / zoom;
               context.fillStyle = '#72d9bb';
               context.fillRect(handleX - 2 / zoom, handleY - 2 / zoom, 4 / zoom, 4 / zoom);
             }
@@ -279,8 +280,8 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
                 angleRadians: Math.atan2(worldMatrix.b, worldMatrix.a),
                 scaleX: Math.hypot(worldMatrix.a, worldMatrix.b),
                 scaleY: Math.sign(worldDeterminant || 1) * Math.hypot(worldMatrix.c, worldMatrix.d),
-                pivotX: node.pivot.x,
-                pivotY: node.pivot.y,
+                pivotX: anchor.x,
+                pivotY: anchor.y,
                 pixelGridSize: settings.pixelGridSize,
                 alphaThreshold: DEFAULT_PIXEL_ALPHA_THRESHOLD,
                 fillSinglePixelGaps: true,
@@ -309,14 +310,14 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
               // A malformed or extreme scale should not take down the entire canvas.
               context.save();
               context.transform(worldMatrix.a, worldMatrix.b, worldMatrix.c, worldMatrix.d, anchorX, anchorY);
-              context.drawImage(image, -node.pivot.x, -node.pivot.y, asset.width, asset.height);
+              context.drawImage(image, -anchor.x, -anchor.y, asset.width, asset.height);
               context.restore();
               drawTransformOverlays(anchorX, anchorY, true);
             }
           } else {
             context.save();
             context.transform(worldMatrix.a, worldMatrix.b, worldMatrix.c, worldMatrix.d, anchorX, anchorY);
-            context.drawImage(image, -node.pivot.x, -node.pivot.y, asset.width, asset.height);
+            context.drawImage(image, -anchor.x, -anchor.y, asset.width, asset.height);
             context.restore();
             drawTransformOverlays(anchorX, anchorY, true);
           }
@@ -338,6 +339,57 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
         const node = nodes[id];
         if (node) drawNode(node, frame, showSelection, matrixCache);
         });
+      // Move and pivot tools mark node origins; the selected node also shows its world coordinates.
+      if (showSelection && (activeTool === 'move' || activeTool === 'pivot')) {
+        orderedNodes(nodes, roots).forEach((id) => {
+          const node = nodes[id];
+          if (!node) return;
+          const selected = id === selectedNodeId;
+          if (!selected && activeTool === 'pivot') {
+            const nodeState = frameStateFor(node, frame);
+            if (!node.visible || !nodeState.visible) return;
+            const world = getWorldMatrix(nodes, frame, id, matrixCache);
+            const size = 4 / zoom;
+            context.save();
+            context.globalAlpha = 0.55;
+            context.strokeStyle = '#aeb7ff';
+            context.lineWidth = 1 / zoom;
+            context.beginPath();
+            context.moveTo(world.e - size, world.f); context.lineTo(world.e + size, world.f);
+            context.moveTo(world.e, world.f - size); context.lineTo(world.e, world.f + size);
+            context.stroke();
+            context.restore();
+            return;
+          }
+          if (!selected) return;
+          const nodeState = frameStateFor(node, frame);
+          if (!node.visible || !nodeState.visible) return;
+          const world = getWorldMatrix(nodes, frame, id, matrixCache);
+          const size = 6 / zoom;
+          context.save();
+          context.strokeStyle = '#ffc578';
+          context.lineWidth = 1 / zoom;
+          context.beginPath();
+          context.moveTo(world.e - size, world.f); context.lineTo(world.e + size, world.f);
+          context.moveTo(world.e, world.f - size); context.lineTo(world.e, world.f + size);
+          context.stroke();
+          context.beginPath();
+          context.arc(world.e, world.f, 3 / zoom, 0, Math.PI * 2);
+          context.stroke();
+          const name = node.name.length > 16 ? `${node.name.slice(0, 15)}…` : node.name;
+          const label = `${name}  ${Math.round(world.e)}, ${Math.round(world.f)}`;
+          context.font = `${10 / zoom}px "Segoe UI", system-ui, sans-serif`;
+          const labelWidth = context.measureText(label).width;
+          const padding = 3 / zoom;
+          const labelX = world.e + 9 / zoom;
+          const labelTop = world.f - 17 / zoom;
+          context.fillStyle = 'rgba(12, 14, 20, 0.82)';
+          context.fillRect(labelX, labelTop, labelWidth + padding * 2, 14 / zoom);
+          context.fillStyle = selected ? '#ffe0a8' : '#dfe4ff';
+          context.fillText(label, labelX + padding, labelTop + 10.5 / zoom);
+          context.restore();
+        });
+      }
       context.restore();
     };
     if (onionSkinEnabled) {
@@ -380,7 +432,7 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
       const key = event.key.toLowerCase();
       if (event.ctrlKey || event.metaKey) {
         if (key === 'd' && selectedNodeId) { event.preventDefault(); duplicateNode(selectedNodeId); }
-        if (key === 'z') { event.preventDefault(); undoTransform(); }
+        if (key === 'z') { event.preventDefault(); if (event.shiftKey) redoTransform(); else undoTransform(); }
         if (key === 'y') { event.preventDefault(); redoTransform(); }
         return;
       }
@@ -414,8 +466,9 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
       const assetId = node && nodeState ? nodeSpriteIdForFrame(node, nodeState) : null;
       const asset = assetId ? assets[assetId] : undefined;
       if (!node || !asset || !node.visible || !frameStateFor(node, frame).visible) continue;
+      const anchor = effectiveSpriteAnchor(asset, node.pivot);
       const local = inverseTransformPoint(getWorldMatrix(nodes, frame, id, cache), worldPoint);
-      if (local && local.x >= -node.pivot.x && local.x <= asset.width - node.pivot.x && local.y >= -node.pivot.y && local.y <= asset.height - node.pivot.y) return id;
+      if (local && local.x >= -anchor.x && local.x <= asset.width - anchor.x && local.y >= -anchor.y && local.y <= asset.height - anchor.y) return id;
     }
     return null;
   };
@@ -425,6 +478,7 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
       <div className="canvas-header">
         <span className="canvas-title"><span className="live-dot" /> Animation canvas</span>
         <span className="canvas-size">{settings.canvasSize.x} × {settings.canvasSize.y}</span>
+        {selectedFrameCount > 1 && <span className="canvas-batch-hint" title="Move, rotate and scale apply relatively to every selected frame">Editing {selectedFrameCount} selected frames</span>}
         <div className="zoom-controls">
           <button type="button" aria-label="Zoom out" onClick={() => setZoom((value) => Math.max(1, value - 1))}><Icon name="zoomOut" /></button>
           <span>{Math.round(zoom * 100)}%</span>
@@ -459,17 +513,21 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
           const nodeMatrix = getWorldMatrix(nodes, frame, node.id, cache);
           const parentMatrix = node.parentId ? getWorldMatrix(nodes, frame, node.parentId, cache) : identityMatrix;
           const startState = frameStateFor(node, frame);
-          const center = transformPoint(nodeMatrix, { x: 0, y: 0 });
           const startLocal = inverseTransformPoint(nodeMatrix, worldPoint);
           if (activeTool === 'pivot' && !startLocal) return;
           if (activeTool === 'pivot' && startLocal) {
             const assetId = nodeSpriteIdForFrame(node, startState);
             const asset = assetId ? assets[assetId] : undefined;
             if (!asset) return;
-            updateNodePivot(node.id, {
-              x: Math.min(asset.width, Math.max(0, Math.round(node.pivot.x + startLocal.x))),
-              y: Math.min(asset.height, Math.max(0, Math.round(node.pivot.y + startLocal.y))),
-            });
+            const anchor = effectiveSpriteAnchor(asset, node.pivot);
+            const nextAnchor = {
+              x: Math.min(asset.width, Math.max(0, Math.round(anchor.x + startLocal.x))),
+              y: Math.min(asset.height, Math.max(0, Math.round(anchor.y + startLocal.y))),
+            };
+            // Re-anchor in place: with a custom anchor both the anchor and the node pose compensate,
+            // otherwise the shared node pivot moves and already keeps pixels fixed.
+            if (asset.anchor) setAssetAnchorKeepingPixels(asset.id, node.id, nextAnchor);
+            else updateNodePivot(node.id, nextAnchor);
             return;
           }
           event.currentTarget.setPointerCapture(event.pointerId);
@@ -480,8 +538,8 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
             parentMatrix,
             nodeMatrix,
             startState: { ...startState, position: { ...startState.position }, scale: { ...startState.scale } },
-            center,
-            startAngle: Math.atan2(worldPoint.y - center.y, worldPoint.x - center.x),
+            rotationLastPoint: worldPoint,
+            rotationDegrees: startState.rotation,
             startScaleAxes: pointInNodeScaleAxes(parentMatrix, startState, worldPoint) ?? { x: 0, y: 0 },
           };
           beginTransform(node.id);
@@ -502,10 +560,11 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
             updateNodeFrame(drag.nodeId, { position: { x: snap(drag.startState.position.x + current.x - start.x, settings.gridSize), y: snap(drag.startState.position.y + current.y - start.y, settings.gridSize) } });
           }
           if (drag.tool === 'rotate') {
-            const angle = Math.atan2(worldPoint.y - drag.center.y, worldPoint.x - drag.center.x);
-            const flipDirection = drag.startState.scale.x < 0 ? -1 : 1;
-            const degrees = drag.startState.rotation + (angle - drag.startAngle) * 180 / Math.PI * flipDirection;
-            updateNodeFrame(drag.nodeId, { rotation: degrees });
+            const delta = rotationDragDelta(drag.parentMatrix, drag.startState.position, drag.rotationLastPoint, worldPoint);
+            drag.rotationLastPoint = worldPoint;
+            if (delta === null) return;
+            drag.rotationDegrees += delta;
+            updateNodeFrame(drag.nodeId, { rotation: drag.rotationDegrees });
           }
           if (drag.tool === 'scale') {
             const currentAxes = pointInNodeScaleAxes(drag.parentMatrix, drag.startState, worldPoint);

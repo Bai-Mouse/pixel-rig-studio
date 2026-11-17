@@ -1,6 +1,7 @@
 import { nodeSpriteIdForFrame, type AnimationFrame, type NodeFrameState, type NodeId, type ProjectSettings, type RigNode, type SpriteAsset } from '../types/project';
 import { DEFAULT_PIXEL_ALPHA_THRESHOLD, snapToGrid } from '../canvas/pixelRotation';
 import { spriteRasterCache } from '../canvas/spriteRasterCache';
+import { effectiveSpriteAnchor } from '../utils/spriteAnchor';
 
 export interface RenderableProject {
   assets: Record<string, SpriteAsset>;
@@ -59,6 +60,55 @@ function multiplyMatrices(parent: Matrix, child: Matrix): Matrix {
 
 export type ExportLayerSource = 'nodes' | 'canvas' | 'combined';
 
+export type ExportFrameMode = 'all' | 'current' | 'group' | 'range';
+
+export interface ExportFrameSelection {
+  mode: ExportFrameMode;
+  frameGroupId?: string | null;
+  /** Zero-based timeline position used by `current`. */
+  currentIndex?: number;
+  /** 1-based, inclusive range start used by `range`. */
+  start?: number;
+  /** 1-based, inclusive range end used by `range`. */
+  end?: number;
+}
+
+export interface SelectedFrame {
+  frame: AnimationFrame;
+  /** Zero-based position on the full timeline, so exported file names keep the real frame number. */
+  index: number;
+}
+
+function clampOneBased(value: number | undefined, fallback: number, frameCount: number) {
+  const rounded = Math.round(Number.isFinite(value as number) ? value as number : fallback);
+  return Math.min(frameCount, Math.max(1, rounded));
+}
+
+/** The frames an export should include, paired with their position on the full timeline. */
+export function selectFrameEntries(frames: AnimationFrame[], selection: ExportFrameSelection): SelectedFrame[] {
+  const entries = frames.map((frame, index) => ({ frame, index }));
+  if (!entries.length) return [];
+  if (selection.mode === 'current') {
+    const index = Math.min(entries.length - 1, Math.max(0, Math.round(selection.currentIndex ?? 0)));
+    return [entries[index]];
+  }
+  if (selection.mode === 'group') {
+    const frameGroupId = selection.frameGroupId;
+    const grouped = frameGroupId ? entries.filter((entry) => entry.frame.group?.id === frameGroupId) : [];
+    return grouped.length ? grouped : entries;
+  }
+  if (selection.mode === 'range') {
+    const first = clampOneBased(selection.start, 1, entries.length);
+    const last = clampOneBased(selection.end, entries.length, entries.length);
+    return entries.slice(Math.min(first, last) - 1, Math.max(first, last));
+  }
+  return entries;
+}
+
+export function selectFramesForExport(frames: AnimationFrame[], frameGroupId: string | null) {
+  return selectFrameEntries(frames, { mode: frameGroupId ? 'group' : 'all', frameGroupId }).map((entry) => entry.frame);
+}
+
 function getWorldMatrix(nodes: Record<NodeId, RigNode>, frame: AnimationFrame, nodeId: NodeId, cache: Map<NodeId, Matrix>): Matrix {
   const cached = cache.get(nodeId);
   if (cached) return cached;
@@ -114,6 +164,7 @@ function renderFrameWithImages(project: RenderableProject, frameIndex: number, i
     const asset = assetId ? project.assets[assetId] : null;
     const image = asset ? images.get(asset.id) : null;
     if (asset && image) {
+      const anchor = effectiveSpriteAnchor(asset, node.pivot);
       const anchorX = snapToGrid(worldMatrix.e, project.settings.pixelGridSize);
       const anchorY = snapToGrid(worldMatrix.f, project.settings.pixelGridSize);
       if (project.settings.pixelPerfectRotation) {
@@ -123,8 +174,8 @@ function renderFrameWithImages(project: RenderableProject, frameIndex: number, i
             angleRadians: Math.atan2(worldMatrix.b, worldMatrix.a),
             scaleX: Math.hypot(worldMatrix.a, worldMatrix.b),
             scaleY: Math.sign(worldDeterminant || 1) * Math.hypot(worldMatrix.c, worldMatrix.d),
-            pivotX: node.pivot.x,
-            pivotY: node.pivot.y,
+            pivotX: anchor.x,
+            pivotY: anchor.y,
             pixelGridSize: project.settings.pixelGridSize,
             alphaThreshold: DEFAULT_PIXEL_ALPHA_THRESHOLD,
             fillSinglePixelGaps: true,
@@ -139,13 +190,13 @@ function renderFrameWithImages(project: RenderableProject, frameIndex: number, i
         } catch {
           context.save();
           context.transform(worldMatrix.a, worldMatrix.b, worldMatrix.c, worldMatrix.d, anchorX, anchorY);
-          context.drawImage(image, -node.pivot.x, -node.pivot.y, asset.width, asset.height);
+          context.drawImage(image, -anchor.x, -anchor.y, asset.width, asset.height);
           context.restore();
         }
       } else {
         context.save();
         context.transform(worldMatrix.a, worldMatrix.b, worldMatrix.c, worldMatrix.d, anchorX, anchorY);
-        context.drawImage(image, -node.pivot.x, -node.pivot.y, asset.width, asset.height);
+        context.drawImage(image, -anchor.x, -anchor.y, asset.width, asset.height);
         context.restore();
       }
     }

@@ -1,4 +1,4 @@
-.source-image-stage { position: relative; overflow: hidden; border: 1px solid #3e465d; border-radius: 5px; background-color: #282d38; background-image: linear-gradient(45deg, #20242d 25%, transparent 25%), linear-gradient(-45deg, #20242d 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #20242d 75%), linear-gradient(-45deg, transparent 75%, #20242d 75%); background-size: 10px 10px; background-position: 0 0, 0 5px, 5px -5px, -5px 0; }
+.source-image-stage { position: relative; flex: 0 0 auto; margin: 8px; touch-action: none; user-select: none; background-color: #282d38; background-image: linear-gradient(45deg, #20242d 25%, transparent 25%), linear-gradient(-45deg, #20242d 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #20242d 75%), linear-gradient(-45deg, transparent 75%, #20242d 75%); background-size: 10px 10px; background-position: 0 0, 0 5px, 5px -5px, -5px 0; }
 .source-image-stage > img { width: 100%; height: 100%; display: block; image-rendering: pixelated; }
 .source-slice-outline { position: absolute; box-sizing: border-box; border: 2px solid #ffc578; background: rgba(255, 197, 120, .12); pointer-events: none; }
 .source-slice-outline.editable { pointer-events: auto; cursor: move; touch-action: none; }
@@ -10,3 +10,17 @@
 .apply-slice-button:hover:not(:disabled) { border-color: #8593ec; background: #3b4670; }
 .apply-slice-button:disabled { opacity: .55; cursor: wait; }
 .source-image-caption { margin: 7px 0 0; color: #77819b; font-size: 9px; line-height: 1.4; }
+.source-image-viewport { max-height: 240px; min-height: 70px; overflow: auto; margin-top: 5px; border: 1px solid #424e6c; border-radius: 4px; background: #151922; overscroll-behavior: contain; }
+.source-zoom-controls { display: flex; align-items: center; gap: 5px; margin-top: 10px; color: #a8b5d3; font-size: 10px; }
+.source-zoom-controls button { padding: 4px 7px; color: #dce4ff; background: #29334a; border: 1px solid #485977; border-radius: 3px; cursor: pointer; }
+.source-slice-handle { position: absolute; width: 9px; height: 9px; border: 1px solid #fff4d7; background: #ffac59; border-radius: 2px; z-index: 3; touch-action: none; }
+.handle-nw { left: -5px; top: -5px; cursor: nwse-resize; }.handle-n { left: calc(50% - 4px); top: -5px; cursor: ns-resize; }.handle-ne { right: -5px; top: -5px; cursor: nesw-resize; }.handle-e { right: -5px; top: calc(50% - 4px); cursor: ew-resize; }.handle-se { right: -5px; bottom: -5px; cursor: nwse-resize; }.handle-s { left: calc(50% - 4px); bottom: -5px; cursor: ns-resize; }.handle-sw { left: -5px; bottom: -5px; cursor: nesw-resize; }.handle-w { left: -5px; top: calc(50% - 4px); cursor: ew-resize; }
+.source-crop-anchor { position: absolute; width: 7px; height: 7px; margin: -3px; border: 1px solid #fff; border-radius: 50%; background: #946dff; pointer-events: none; z-index: 4; }
+.source-anchor-point { position: absolute; width: 11px; height: 11px; margin: -6px; border: 1px solid #ffcf7a; border-radius: 50%; box-shadow: 0 0 0 1px rgba(0, 0, 0, .55); pointer-events: none; z-index: 2; }
+.source-anchor-point::before, .source-anchor-point::after { position: absolute; content: ''; background: #ffcf7a; }
+.source-anchor-point::before { left: 50%; top: -3px; width: 1px; height: 15px; margin-left: -.5px; }
+.source-anchor-point::after { top: 50%; left: -3px; width: 15px; height: 1px; margin-top: -.5px; }
+.crop-anchor-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; color: #93a1bd; font-size: 10px; }
+.crop-anchor-grid { display: grid; grid-template-columns: repeat(3, 15px); gap: 2px; }
+.crop-anchor-grid button { width: 15px; height: 15px; padding: 0; color: #9daed1; background: #242c3f; border: 1px solid #4c5876; border-radius: 2px; line-height: 10px; cursor: pointer; }
+.crop-anchor-grid button[aria-pressed="true"] { color: white; background: #6b58b3; border-color: #bdadff; }

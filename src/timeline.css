@@ -6,6 +6,8 @@
 .timeline-toolbar { overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
 .timeline-label, .playback-controls, .timeline-template-controls, .timeline-actions { flex: 0 0 auto; }
 .timeline-actions button { white-space: nowrap; }
+.timeline-template-controls select.animation-import-mode { max-width: 190px; }
+.timeline-template-controls select.animation-import-mode:focus-visible { outline: 1px solid #8791fa; border-color: #8791fa; }
 
 .frame-cell:active { cursor: grabbing; }
 .frame-cell.dragging { opacity: .4; }
@@ -26,7 +28,11 @@
 .frame-group-label { position: absolute; right: 3px; bottom: 2px; left: 3px; overflow: hidden; color: var(--frame-group-color); font-size: 7px; font-weight: 700; line-height: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .timeline-actions .frame-group-manage { max-width: 130px; overflow: hidden; border-color: var(--group-color); color: var(--group-color); text-overflow: ellipsis; white-space: nowrap; }
 .frame-group-dialog { width: min(390px, calc(100vw - 48px)); }
-.frame-group-name, .frame-group-color { display: grid; grid-template-columns: 100px minmax(0, 1fr); align-items: center; gap: 10px; color: #aab1c8; font-size: 10px; }
+.frame-group-name, .frame-group-color, .frame-group-target { display: grid; grid-template-columns: 100px minmax(0, 1fr); align-items: center; gap: 10px; color: #aab1c8; font-size: 10px; }
+.frame-group-target select { min-width: 0; padding: 7px; border: 1px solid #41485d; border-radius: 4px; color: #e5e8fa; background: #20232b; font: inherit; }
+.frame-group-hint { margin: 0; color: #7c849d; font-size: 10px; line-height: 1.45; }
+.frame-group-footer-actions { display: flex; gap: 8px; margin-right: auto; }
+.frame-group-footer-actions button { white-space: nowrap; }
 .frame-group-name input { min-width: 0; padding: 7px; border: 1px solid #41485d; border-radius: 4px; color: #e5e8fa; background: #20232b; }
 .frame-group-color input { width: 52px; height: 30px; padding: 2px; border: 1px solid #41485d; border-radius: 4px; background: #20232b; cursor: pointer; }
-.frame-group-dialog footer { justify-content: flex-end; }.frame-group-dialog footer .ungroup-button { margin-right: auto; border-color: #70434d; color: #ffb8bd; background: #3b272e; }
+.frame-group-dialog footer { justify-content: flex-end; }.frame-group-dialog footer .ungroup-button { border-color: #70434d; color: #ffb8bd; background: #3b272e; }

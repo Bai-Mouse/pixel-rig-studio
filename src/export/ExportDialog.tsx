@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { Icon } from '../components/Icon';
 import { useProjectStore } from '../state/projectStore';
-import { canvasToPngBlob, framePixels, renderAllFrames, type ExportLayerSource, type RenderableProject } from './animationRenderer';
+import type { AnimationFrame } from '../types/project';
+import { canvasToPngBlob, framePixels, renderAllFrames, selectFrameEntries, type ExportFrameMode, type ExportLayerSource, type RenderableProject } from './animationRenderer';
 import { encodeApng } from './apngEncoder';
 import { encodeGif } from './gifEncoder';
 import { animationDataFile, projectFile, type SerializableProject } from './projectSerializer';
@@ -11,14 +12,14 @@ interface ExportDialogProps {
   onClose: () => void;
 }
 
-function snapshotProject(): SerializableProject {
+function snapshotProject(selectedFrames?: AnimationFrame[]): SerializableProject {
   const state = useProjectStore.getState();
   return {
     assets: state.assets,
     nodes: state.nodes,
     rootNodeIds: state.rootNodeIds,
     settings: state.settings,
-    frames: state.frames,
+    frames: selectedFrames ?? state.frames,
     fps: state.fps,
     isLooping: state.isLooping,
   };
@@ -26,6 +27,19 @@ function snapshotProject(): SerializableProject {
 
 function jsonBlob(value: unknown) {
   return new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' });
+}
+
+/** Turns the project name into a file-name stem, falling back to the previous default. */
+function fileStem(name: string) {
+  return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'untitled-character';
+}
+
+function frameNumber(index: number) {
+  return String(index + 1).padStart(3, '0');
+}
+
+function clampFrameNumber(value: number, frameCount: number) {
+  return Math.min(Math.max(1, Math.round(Number.isFinite(value) ? value : 1)), Math.max(1, frameCount));
 }
 
 interface SpriteSheetLayout {
@@ -99,15 +113,34 @@ async function createSpriteSheet(project: RenderableProject, layout: SpriteSheet
 
 export function ExportDialog({ onClose }: ExportDialogProps) {
   const frames = useProjectStore((state) => state.frames);
-  const frameCount = frames.length;
+  const currentFrameIndex = useProjectStore((state) => state.currentFrameIndex);
   const fps = useProjectStore((state) => state.fps);
   const settings = useProjectStore((state) => state.settings);
   const assets = useProjectStore((state) => state.assets);
   const nodes = useProjectStore((state) => state.nodes);
+  const projectName = useProjectStore((state) => state.projectName);
+  const frameGroups = useMemo(
+    () => Array.from(new Map(frames.flatMap((frame) => frame.group ? [[frame.group.id, frame.group] as const] : [])).values()),
+    [frames],
+  );
+  const [selectionMode, setSelectionMode] = useState<ExportFrameMode>('all');
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(() => frameGroups[0]?.id ?? null);
+  const [rangeStart, setRangeStart] = useState(1);
+  const [rangeEnd, setRangeEnd] = useState(() => Math.max(1, frames.length));
+  const selectedEntries = useMemo(() => selectFrameEntries(frames, {
+    mode: selectionMode,
+    frameGroupId: selectedGroupId,
+    currentIndex: currentFrameIndex,
+    start: rangeStart,
+    end: rangeEnd,
+  }), [currentFrameIndex, frames, rangeEnd, rangeStart, selectedGroupId, selectionMode]);
+  const selectedFrames = useMemo(() => selectedEntries.map((entry) => entry.frame), [selectedEntries]);
+  const selectedGroup = selectionMode === 'group' ? frameGroups.find((group) => group.id === selectedGroupId) ?? null : null;
+  const frameCount = selectedEntries.length;
   const [isExporting, setIsExporting] = useState(false);
   const [status, setStatus] = useState('Choose an output format.');
-  const [columns, setColumns] = useState(() => Math.max(1, Math.ceil(Math.sqrt(frameCount))));
-  const [rows, setRows] = useState(() => Math.max(1, Math.ceil(frameCount / Math.ceil(Math.sqrt(frameCount)))));
+  const [columns, setColumns] = useState(() => Math.max(1, Math.ceil(Math.sqrt(frames.length))));
+  const [rows, setRows] = useState(() => Math.max(1, Math.ceil(frames.length / Math.max(1, Math.ceil(Math.sqrt(frames.length))))));
   const [gap, setGap] = useState(0);
   const [padding, setPadding] = useState(0);
   const [frameWidth, setFrameWidth] = useState(() => settings.canvasSize.x);
@@ -118,11 +151,20 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
   const [isPreviewing, setIsPreviewing] = useState(true);
   const [layerSource, setLayerSource] = useState<ExportLayerSource>('nodes');
 
+  const baseName = fileStem(projectName);
+  const rangeLow = Math.min(rangeStart, rangeEnd);
+  const rangeHigh = Math.max(rangeStart, rangeEnd);
+  const selectionSuffix = selectionMode === 'range'
+    ? `-${frameNumber(rangeLow - 1)}-${frameNumber(rangeHigh - 1)}`
+    : selectionMode === 'current'
+      ? `-frame-${frameNumber(currentFrameIndex)}`
+      : '';
+
   const run = async (label: string, action: (project: SerializableProject) => Promise<ExportWriteResult>) => {
     setIsExporting(true);
     setStatus(`Preparing ${label}...`);
     try {
-      const result = await action(snapshotProject());
+      const result = await action(snapshotProject(selectedFrames));
       setStatus(result === 'cancelled' ? `${label} cancelled.` : result === 'saved' ? `${label} saved to the chosen location.` : `${label} download started.`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : `${label} export failed.`);
@@ -135,9 +177,33 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
   const layoutIsValid = columns * rows >= frameCount;
 
   useEffect(() => {
+    const nextColumns = Math.max(1, Math.ceil(Math.sqrt(frameCount)));
+    setColumns(nextColumns);
+    setRows(Math.max(1, Math.ceil(frameCount / nextColumns)));
+  }, [frameCount]);
+
+  useEffect(() => {
+    if (selectionMode === 'group' && !frameGroups.length) setSelectionMode('all');
+  }, [frameGroups.length, selectionMode]);
+
+  useEffect(() => {
+    if (selectedGroupId && !frameGroups.some((group) => group.id === selectedGroupId)) {
+      setSelectedGroupId(frameGroups[0]?.id ?? null);
+    }
+  }, [frameGroups, selectedGroupId]);
+
+  const selectionSummary = selectionMode === 'current'
+    ? `Only frame ${currentFrameIndex + 1} of ${frames.length} will be exported.`
+    : selectionMode === 'range'
+      ? `Frames ${rangeLow}–${rangeHigh} (${frameCount} of ${frames.length}) will be exported.`
+      : selectionMode === 'group' && selectedGroup
+        ? `Only “${selectedGroup.name}” (${frameCount} of ${frames.length} frames) will be exported.`
+        : `Every timeline frame (${frameCount}) will be exported.`;
+
+  useEffect(() => {
     let cancelled = false;
     let urlToRelease: string | null = null;
-    const project = snapshotProject();
+    const project = snapshotProject(selectedFrames);
     if (!layoutIsValid) {
       setPreviewUrl(null);
       setPreviewSize(null);
@@ -166,19 +232,67 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
       cancelled = true;
       if (urlToRelease) URL.revokeObjectURL(urlToRelease);
     };
-  }, [assets, columns, frameHeight, frameWidth, frames, gap, layerSource, layoutIsValid, nodes, padding, rows, settings]);
+  }, [assets, columns, frameHeight, frameWidth, gap, layerSource, layoutIsValid, nodes, padding, rows, selectedFrames, settings]);
 
   const exportSheet = () => run('PNG sprite sheet', async (project: RenderableProject) => {
     const { sheet } = await createSpriteSheet(project, layout, layerSource);
-    return saveExportFile({ blob: await canvasToPngBlob(sheet), name: 'untitled-character-sheet.png' }, { name: 'PNG image', extensions: ['png'] });
+    return saveExportFile({ blob: await canvasToPngBlob(sheet), name: `${baseName}${selectionSuffix}-sheet.png` }, { name: 'PNG image', extensions: ['png'] });
   });
+
+  /** Exports exactly the frame shown on the canvas, whatever the frame-range selection says. */
+  const exportCurrentFrame = () => {
+    const state = useProjectStore.getState();
+    const index = state.currentFrameIndex;
+    const frame = state.frames[index];
+    if (!frame) return;
+    void run(`frame ${index + 1} PNG`, async () => {
+      const [canvas] = await renderAllFrames(snapshotProject([frame]), layerSource);
+      return saveExportFile(
+        { blob: await canvasToPngBlob(canvas), name: `${baseName}-frame-${frameNumber(index)}.png` },
+        { name: 'PNG image', extensions: ['png'] },
+      );
+    });
+  };
 
   return (
     <div className="export-overlay" role="dialog" aria-modal="true" aria-label="Export animation">
       <section className="export-dialog">
         <header><div><span className="export-mark"><Icon name="keyframe" /></span><div><strong>Export animation</strong><small>{frameCount} frame{frameCount === 1 ? '' : 's'} - {settings.canvasSize.x} x {settings.canvasSize.y} - {fps} FPS</small></div></div><button type="button" onClick={onClose}>Close</button></header>
         <div className="export-content">
-          <p className="export-intro">All raster exports use the crisp pixel renderer without smoothing. PNG exports preserve transparency.</p>
+          <p className="export-intro">All raster exports use the crisp pixel renderer without smoothing. PNG exports preserve transparency. Sprite sheets, individual frames, GIF, APNG and animation JSON all follow the frame selection below.</p>
+          <section className="export-frame-range" aria-label="Export frame range">
+            <div><strong>Frames to export</strong><small>Export the complete timeline, the current frame, one group, or a range of frames.</small></div>
+            <label>
+              <span>Frame source</span>
+              <select value={selectionMode} onChange={(event) => setSelectionMode(event.target.value as ExportFrameMode)}>
+                <option value="all">All frames ({frames.length})</option>
+                <option value="current">Current frame ({currentFrameIndex + 1})</option>
+                <option value="group" disabled={!frameGroups.length}>Frame group</option>
+                <option value="range">Frame range</option>
+              </select>
+            </label>
+            {selectionMode === 'group' ? (
+              <label>
+                <span>Group</span>
+                <select value={selectedGroupId ?? ''} onChange={(event) => setSelectedGroupId(event.target.value || null)}>
+                  {frameGroups.map((group) => {
+                    const count = frames.filter((frame) => frame.group?.id === group.id).length;
+                    return <option key={group.id} value={group.id}>{group.name} ({count})</option>;
+                  })}
+                </select>
+              </label>
+            ) : selectionMode === 'range' ? (
+              <div className="export-range-inputs">
+                <label>From<input type="number" min={1} max={frames.length} value={rangeStart} onChange={(event) => setRangeStart(clampFrameNumber(Number(event.target.value), frames.length))} /></label>
+                <label>To<input type="number" min={1} max={frames.length} value={rangeEnd} onChange={(event) => setRangeEnd(clampFrameNumber(Number(event.target.value), frames.length))} /></label>
+              </div>
+            ) : (
+              <span className="export-frame-range-hint">{selectionMode === 'current' ? `Frame ${currentFrameIndex + 1} of ${frames.length}` : `${frames.length} frames`}</span>
+            )}
+            <span className="export-frame-range-summary" style={selectedGroup ? { '--export-group-color': selectedGroup.color } as CSSProperties : undefined}>
+              {selectedGroup ? <i /> : null}{selectionSummary}
+            </span>
+          </section>
           <section className="export-layer-source" aria-label="Export layer source">
             <div><strong>Export content</strong><small>Choose which workspace contributes pixels to every image and animation export.</small></div>
             <button className={layerSource === 'nodes' ? 'active' : ''} type="button" onClick={() => setLayerSource('nodes')}><Icon name="layers" /><span><strong>Node layers</strong><small>Rigged sprites only</small></span></button>
@@ -202,13 +316,14 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
           </section>
           <div className="export-grid">
             <button type="button" disabled={isExporting || !layoutIsValid} onClick={() => void exportSheet()}><Icon name="grid" /><strong>PNG sprite sheet</strong><span>Export the configured layout.</span></button>
-            <button type="button" disabled={isExporting} onClick={() => void run('individual PNG frames', async (project) => { const frames = await renderAllFrames(project, layerSource); return saveExportFrames(await Promise.all(frames.map(async (frame, index) => ({ blob: await canvasToPngBlob(frame), name: `untitled-character-${String(index + 1).padStart(3, '0')}.png` })))); })}><Icon name="image" /><strong>Individual frames</strong><span>Choose a folder for all generated PNGs.</span></button>
-            <button type="button" disabled={isExporting} onClick={() => void run('GIF animation', async (project) => { const frames = await renderAllFrames(project, layerSource); return saveExportFile({ blob: encodeGif(frames.map((frame) => ({ width: frame.width, height: frame.height, pixels: framePixels(frame) })), project.fps), name: 'untitled-character.gif' }, { name: 'GIF animation', extensions: ['gif'] }); })}><Icon name="play" /><strong>Animated GIF</strong><span>Looping 256-color GIF animation.</span></button>
-            <button type="button" disabled={isExporting} onClick={() => void run('animated PNG', async (project) => { const frames = await renderAllFrames(project, layerSource); return saveExportFile({ blob: await encodeApng(frames.map((frame) => ({ width: frame.width, height: frame.height, pixels: framePixels(frame) })), project.fps), name: 'untitled-character.png' }, { name: 'Animated PNG', extensions: ['png'] }); })}><Icon name="layers" /><strong>Animated PNG</strong><span>RGBA animation with alpha support.</span></button>
+            <button type="button" disabled={isExporting} onClick={() => void run('individual PNG frames', async (project) => { const rendered = await renderAllFrames(project, layerSource); return saveExportFrames(await Promise.all(rendered.map(async (frame, offset) => ({ blob: await canvasToPngBlob(frame), name: `${baseName}-${frameNumber(selectedEntries[offset]?.index ?? offset)}.png` })))); })}><Icon name="image" /><strong>Individual frames</strong><span>Choose a folder for every selected PNG.</span></button>
+            <button type="button" disabled={isExporting} onClick={() => void run('GIF animation', async (project) => { const rendered = await renderAllFrames(project, layerSource); return saveExportFile({ blob: encodeGif(rendered.map((frame) => ({ width: frame.width, height: frame.height, pixels: framePixels(frame) })), project.fps), name: `${baseName}${selectionSuffix}.gif` }, { name: 'GIF animation', extensions: ['gif'] }); })}><Icon name="play" /><strong>Animated GIF</strong><span>Looping 256-color GIF of the selected frames.</span></button>
+            <button type="button" disabled={isExporting} onClick={() => void run('animated PNG', async (project) => { const rendered = await renderAllFrames(project, layerSource); return saveExportFile({ blob: await encodeApng(rendered.map((frame) => ({ width: frame.width, height: frame.height, pixels: framePixels(frame) })), project.fps), name: `${baseName}${selectionSuffix}.png` }, { name: 'Animated PNG', extensions: ['png'] }); })}><Icon name="layers" /><strong>Animated PNG</strong><span>RGBA animation with alpha support.</span></button>
+            <button className="export-current-frame" type="button" disabled={isExporting} onClick={exportCurrentFrame}><Icon name="image" /><strong>Current frame PNG</strong><span>Export only frame {currentFrameIndex + 1} at {settings.canvasSize.x} × {settings.canvasSize.y} px, ignoring the frame selection.</span></button>
           </div>
           <div className="export-data-row">
-            <button type="button" disabled={isExporting} onClick={() => void run('animation JSON', async (project) => saveExportFile({ blob: jsonBlob(animationDataFile(project)), name: 'untitled-character.animation.json' }, { name: 'JSON data', extensions: ['json'] }))}><Icon name="keyframe" /> JSON animation data</button>
-            <button type="button" disabled={isExporting} onClick={() => void run('project JSON', async (project) => saveExportFile({ blob: jsonBlob(projectFile(project)), name: 'untitled-character.pixelrig.json' }, { name: 'Pixel Rig project', extensions: ['json'] }))}><Icon name="download" /> Save project JSON</button>
+            <button type="button" disabled={isExporting} onClick={() => void run('animation JSON', async (project) => saveExportFile({ blob: jsonBlob(animationDataFile(project)), name: `${baseName}${selectionSuffix}.animation.json` }, { name: 'JSON data', extensions: ['json'] }))}><Icon name="keyframe" /> JSON animation data</button>
+            <button type="button" disabled={isExporting} onClick={() => void run('project JSON', async () => saveExportFile({ blob: jsonBlob(projectFile(snapshotProject())), name: `${baseName}.pixelrig.json` }, { name: 'Pixel Rig project', extensions: ['json'] }))}><Icon name="download" /> Save complete project JSON</button>
           </div>
         </div>
         <footer><span className={status.includes('failed') || status.includes('could not') || status.includes('needs') ? 'export-error' : ''}>{status}</span><span>{isExporting ? 'Working...' : 'Ready'}</span></footer>
