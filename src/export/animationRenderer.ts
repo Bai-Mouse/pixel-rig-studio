@@ -220,6 +220,33 @@ export async function renderAnimationFrame(project: RenderableProject, frameInde
   return renderFrameWithImages(project, frameIndex, await loadAssets(project.assets));
 }
 
+const previewAssetCache = new WeakMap<RenderableProject['assets'], ReturnType<typeof loadAssets>>();
+
+export async function renderPreviewFrame(project: RenderableProject, frameIndex: number, maxSize = 256) {
+  let images = previewAssetCache.get(project.assets);
+  if (!images) {
+    images = loadAssets(project.assets).catch((error) => {
+      previewAssetCache.delete(project.assets);
+      throw error;
+    });
+    previewAssetCache.set(project.assets, images);
+  }
+  const frame = renderFrameWithImages(project, frameIndex, await images);
+  if (project.frames[frameIndex]?.canvasData) {
+    frame.getContext('2d')?.drawImage(await renderDrawingFrame(project, frameIndex), 0, 0);
+  }
+  const scale = Math.min(1, maxSize / Math.max(frame.width, frame.height));
+  if (scale === 1) return frame;
+  const thumbnail = document.createElement('canvas');
+  thumbnail.width = Math.max(1, Math.round(frame.width * scale));
+  thumbnail.height = Math.max(1, Math.round(frame.height * scale));
+  const context = thumbnail.getContext('2d');
+  if (!context) throw new Error('Could not create frame preview.');
+  context.imageSmoothingEnabled = false;
+  context.drawImage(frame, 0, 0, thumbnail.width, thumbnail.height);
+  return thumbnail;
+}
+
 async function renderDrawingFrame(project: RenderableProject, frameIndex: number): Promise<HTMLCanvasElement> {
   const frame = project.frames[frameIndex];
   if (!frame) throw new Error('The selected animation frame does not exist.');

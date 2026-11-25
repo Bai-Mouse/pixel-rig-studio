@@ -9,6 +9,11 @@ export interface EditableScene {
 }
 
 export interface EditPlan { message: string; operations: EditOperation[] }
+export interface EditScope {
+  nodeId: string | null;
+  frameIds: string[];
+  referenceFrameId: string | undefined;
+}
 export type EditOperation =
   | { type: 'set_node_frame'; nodeId: string; frameNumbers: number[]; positionX: number | null; positionY: number | null; rotation: number | null; scaleX: number | null; scaleY: number | null; visible: boolean | null; spriteIndex: number | null; sortingOrder: number | null }
   | { type: 'set_node'; nodeId: string; name: string | null; pivotX: number | null; pivotY: number | null; visible: boolean | null; locked: boolean | null }
@@ -63,9 +68,16 @@ function defaultState(node: RigNode): NodeFrameState {
   return { ...structuredClone(node.transform), visible: node.visible, imageIndex: 0, sortingOrder: node.sortingOrder ?? 0 };
 }
 
-export function applyEditPlan(scene: EditableScene, plan: EditPlan, assetIds: string[]): EditableScene {
+export function applyEditPlan(scene: EditableScene, plan: EditPlan, assetIds: string[], scope?: EditScope): EditableScene {
   const result = structuredClone(scene);
   const assets = new Set(assetIds);
+  const targetFrames = scope ? new Set(scope.frameIds) : null;
+  const targetNodes = scope?.nodeId ? new Set([scope.nodeId]) : null;
+  const assertFrameScope = (frameIndex: number) => {
+    if (targetFrames && !targetFrames.has(result.frames[frameIndex].id)) {
+      throw new Error(`修改超出帧范围（第 ${frameIndex + 1} 帧）。请扩大帧范围或让 AI 重新生成。`);
+    }
+  };
   const getNode = (id: unknown, editable = true): RigNode => {
     const key = text(id, '节点 ID');
     if (!Object.prototype.hasOwnProperty.call(result.nodes, key)) throw new Error(`找不到节点：${key}`);
@@ -76,7 +88,9 @@ export function applyEditPlan(scene: EditableScene, plan: EditPlan, assetIds: st
   const index = (value: unknown) => number(value, '帧编号', 1, result.frames.length, true) - 1;
   const indexes = (value: unknown): number[] => {
     if (!Array.isArray(value) || !value.length) throw new Error('需要指定至少一个帧。');
-    return [...new Set(value.map(index))];
+    const ids = [...new Set(value.map(index))];
+    ids.forEach(assertFrameScope);
+    return ids;
   };
   const validSprites = (value: unknown) => {
     const ids = strings(value);
@@ -85,6 +99,11 @@ export function applyEditPlan(scene: EditableScene, plan: EditPlan, assetIds: st
   };
   for (const raw of plan.operations) {
     const op = object(raw);
+    const targetId = op.type === 'add_node' ? op.parentId : op.nodeId;
+    if (targetNodes && (op.type === 'add_node' || 'nodeId' in op)
+      && (typeof targetId !== 'string' || !targetNodes.has(targetId))) {
+      throw new Error('修改超出节点范围。请扩大节点范围或让 AI 重新生成。');
+    }
     switch (op.type) {
       case 'set_node_frame': {
         const node = getNode(op.nodeId);
@@ -148,6 +167,7 @@ export function applyEditPlan(scene: EditableScene, plan: EditPlan, assetIds: st
         const spriteIds = validSprites(op.spriteIds);
         const node: RigNode = { id, name: text(op.name, '节点名称'), parentId: parent?.id ?? null, children: [], assetIds: spriteIds, assetId: spriteIds[0] ?? null, pivot: { x: 0, y: 0 }, transform: { position: { x: 0, y: 0 }, rotation: 0, scale: { x: 1, y: 1 } }, visible: true, locked: false };
         result.nodes[id] = node;
+        targetNodes?.add(id);
         if (parent) parent.children.push(id); else result.rootNodeIds.push(id);
         result.frames.forEach((frame) => { frame.nodeStates[id] = defaultState(node); });
         break;
@@ -179,7 +199,9 @@ export function applyEditPlan(scene: EditableScene, plan: EditPlan, assetIds: st
         const after = number(op.afterFrameNumber, '插入位置', 0, result.frames.length, true);
         const count = number(op.count, '新增帧数', 1, 120, true);
         if (result.frames.length + count > 1000) throw new Error('动画帧数不能超过 1000。');
-        result.frames.splice(after, 0, ...Array.from({ length: count }, () => ({ ...structuredClone(source), id: `frame-${crypto.randomUUID()}` })));
+        const copies = Array.from({ length: count }, () => ({ ...structuredClone(source), id: `frame-${crypto.randomUUID()}` }));
+        copies.forEach(({ id }) => targetFrames?.add(id));
+        result.frames.splice(after, 0, ...copies);
         break;
       }
       case 'remove_frames': {
@@ -190,6 +212,7 @@ export function applyEditPlan(scene: EditableScene, plan: EditPlan, assetIds: st
       }
       case 'move_frame': {
         const from = index(op.frameNumber), to = index(op.toFrameNumber);
+        assertFrameScope(from);
         const [frame] = result.frames.splice(from, 1); result.frames.splice(to, 0, frame);
         break;
       }
@@ -217,6 +240,7 @@ export function applyEditPlan(scene: EditableScene, plan: EditPlan, assetIds: st
           ? (t: number) => t
           : (t: number) => t * t * (3 - 2 * t);
         const write = (frameIndex: number, values: Record<string, unknown>) => {
+          assertFrameScope(frameIndex);
           const frame = result.frames[frameIndex];
           const state = frame.nodeStates[node.id] ?? defaultState(node);
           frame.nodeStates[node.id] = state;

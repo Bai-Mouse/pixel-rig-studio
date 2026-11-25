@@ -10,6 +10,16 @@
 未登录时，面板会显示 PowerShell 登录命令。完成登录后重新检测。
 无需在 Pixel Rig Studio 中粘贴 API Key 或登录令牌。
 
+### Claude Code CLI
+
+和 Codex 一样走本机已登录的 CLI，不需要 API Key（Claude Pro/Max 订阅即可）。
+1. 安装 Claude Code（PowerShell：`irm https://claude.ai/install.ps1 | iex`），在终端运行 `claude` 并按提示登录（或输入 `/login`）。
+2. 在“连接设置”里选择 **Claude Code CLI**，点击“保存并检测”。路径留空会自动查找 PATH、`%USERPROFILE%\.local\bin\claude.exe` 和 npm 安装的 `claude.cmd`。
+3. 模型可留空，或填 `sonnet` / `opus` / `haiku`。
+
+请求在空的临时目录中以 `claude -p` 非交互模式运行，禁用全部内置工具和 MCP，只返回编辑方案。
+调用时不读取 `~/.claude/settings.json` 等用户配置，所以即使用 CC Switch 把终端里的 Claude Code 切到了第三方服务商，这里仍使用 claude.ai 账号。
+
 Codex 会收到当前节点属性、帧数据、素材名称/尺寸和最近对话；不发送素材 PNG 或画布像素。
 聊天记录仅在当前编辑器会话中保留，关闭面板不会清空记录。
 

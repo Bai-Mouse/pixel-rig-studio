@@ -41,6 +41,12 @@ export interface SpriteSlice {
   mask?: string;
 }
 
+export interface IkBinding {
+  name: string;
+  upperId: NodeId;
+  lowerId: NodeId;
+}
+
 export interface RigNode {
   id: NodeId;
   name: string;
@@ -62,6 +68,8 @@ export interface RigNode {
   };
   visible: boolean;
   locked: boolean;
+  /** A named two-joint chain whose endpoint is this node. */
+  ikBinding?: IkBinding;
 }
 
 export function nodeSpriteIds(node: Pick<RigNode, 'assetIds' | 'assetId'>): AssetId[] {
@@ -111,9 +119,18 @@ export interface AnimationFrame {
   canvasData?: string;
   /** Optional organizational group carried with the frame when reordered. */
   group?: FrameGroup;
+  /** Planted end-node pivots in canvas/world coordinates. */
+  footLocks?: Record<NodeId, FootLock>;
 }
 
-export type TransformTool = 'select' | 'move' | 'rotate' | 'scale' | 'pivot';
+export interface FootLock {
+  upperId: NodeId;
+  lowerId: NodeId;
+  point: Vec2;
+  axis: Vec2;
+}
+
+export type TransformTool = 'select' | 'move' | 'rotate' | 'scale' | 'pivot' | 'ik';
 export type AnimationTemplate = 'walk' | 'idle';
 
 export interface TweenProperties {

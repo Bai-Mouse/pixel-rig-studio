@@ -6,6 +6,9 @@ import { DEFAULT_PIXEL_ALPHA_THRESHOLD, snapToGrid } from './pixelRotation';
 import { spriteRasterCache } from './spriteRasterCache';
 import { rotationDragDelta } from './rotationDrag';
 import { effectiveSpriteAnchor } from '../utils/spriteAnchor';
+import { activeFootLocks, bendDistance, bendHandle, captureFootLock, ikChain, isAncestor, nodePivotWorld } from '../state/twoBoneIk';
+import { IkBindings } from './IkBindings';
+import { drawGizmo, hitGizmo, hitTransformHandle, moveGizmoPosition, transformControl, transformToolForKey, type GizmoPart } from './transformControls';
 
 const imageCache = new Map<string, HTMLImageElement>();
 let drawingPreview: { source: string; image: HTMLImageElement } | null = null;
@@ -20,7 +23,8 @@ interface Matrix {
 }
 
 interface TransformDrag {
-  tool: Exclude<TransformTool, 'select'>;
+  pointerId: number;
+  tool: Exclude<TransformTool, 'select' | 'ik'>;
   nodeId: string;
   startWorld: Vec2;
   parentMatrix: Matrix;
@@ -28,10 +32,17 @@ interface TransformDrag {
   startState: NodeFrameState;
   rotationLastPoint: Vec2;
   rotationDegrees: number;
+  rotationOffset?: Vec2;
+  moveAxis?: GizmoPart;
   startScaleAxes: Vec2;
+  pivotAsset?: SpriteAsset;
 }
 
 const identityMatrix: Matrix = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+
+function isEditingText(target: EventTarget | null) {
+  return target instanceof Element && Boolean(target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])'));
+}
 
 function frameStateFor(node: RigNode, frame: AnimationFrame): NodeFrameState {
   return frame.nodeStates[node.id] ?? {
@@ -108,6 +119,16 @@ function getWorldMatrix(nodes: Record<string, RigNode>, frame: AnimationFrame, n
   return world;
 }
 
+function displayMatrix(matrix: Matrix, pixelPerfect: boolean, gridSize: number): Matrix {
+  return pixelPerfect ? { ...matrix, e: snapToGrid(matrix.e, gridSize), f: snapToGrid(matrix.f, gridSize) } : matrix;
+}
+
+function nodeControl(tool: TransformTool, node: RigNode, state: NodeFrameState, matrix: Matrix, asset: SpriteAsset | undefined, zoom: number) {
+  if (node.locked || !node.visible || !state.visible || (tool === 'pivot' && !asset)) return null;
+  const sprite = asset && { width: asset.width, height: asset.height, anchor: effectiveSpriteAnchor(asset, node.pivot) };
+  return transformControl(tool, matrix, zoom, sprite);
+}
+
 function orderedNodes(nodes: Record<string, RigNode>, roots: string[]) {
   const result: string[] = [];
   const visit = (id: string) => {
@@ -170,7 +191,7 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [spaceDown, setSpaceDown] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
-  const dragStart = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+  const dragStart = useRef<{ pointerId: number; x: number; y: number; panX: number; panY: number } | null>(null);
   const assets = useProjectStore((state) => state.assets);
   const nodes = useProjectStore((state) => state.nodes);
   const roots = useProjectStore((state) => state.rootNodeIds);
@@ -178,6 +199,13 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
   const selectedNodeId = useProjectStore((state) => state.selectedNodeId);
   const frames = useProjectStore((state) => state.frames);
   const currentFrameIndex = useProjectStore((state) => state.currentFrameIndex);
+  const isPlaying = useProjectStore((state) => state.isPlaying);
+  const allSelectedLocked = useProjectStore((state) => {
+    const id = state.selectedNodeId;
+    if (!id) return false;
+    const selection = new Set(inspectorFrameIds(state));
+    return selection.size > 0 && state.frames.every((frame) => !selection.has(frame.id) || Boolean(frame.footLocks?.[id]));
+  });
   const selectedFrameCount = useProjectStore((state) => inspectorFrameIds(state).length);
   const onionSkinEnabled = useProjectStore((state) => state.onionSkinEnabled);
   const activeTool = useProjectStore((state) => state.activeTool);
@@ -186,6 +214,11 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
   const selectNode = useProjectStore((state) => state.selectNode);
   const setActiveTool = useProjectStore((state) => state.setActiveTool);
   const beginTransform = useProjectStore((state) => state.beginTransform);
+  const beginIk = useProjectStore((state) => state.beginIk);
+  const dragIk = useProjectStore((state) => state.dragIk);
+  const dragIkBend = useProjectStore((state) => state.dragIkBend);
+  const toggleFootLock = useProjectStore((state) => state.toggleFootLock);
+  const reverseIkBend = useProjectStore((state) => state.reverseIkBend);
   const updateNodeFrame = useProjectStore((state) => state.updateNodeFrame);
   const commitTransform = useProjectStore((state) => state.commitTransform);
   const updateNodePivot = useProjectStore((state) => state.updateNodePivot);
@@ -195,6 +228,17 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
   const undoTransform = useProjectStore((state) => state.undoTransform);
   const redoTransform = useProjectStore((state) => state.redoTransform);
   const dragRef = useRef<TransformDrag | null>(null);
+  const ikDrag = useRef<({ pointerId: number } & (
+    { kind: 'position'; start: Vec2 } | { kind: 'bend'; root: Vec2; tip: Vec2; side: -1 | 1 }
+  )) | null>(null);
+  const [ikMessage, setIkMessage] = useState<string | null>(null);
+  const [activeGizmo, setActiveGizmo] = useState<GizmoPart | null>(null);
+  const [bending, setBending] = useState(false);
+  const currentFrame = frames[currentFrameIndex];
+  const chain = selectedNodeId && activeTool === 'ik' ? ikChain(nodes, selectedNodeId) : null;
+  const canSolveIk = Boolean(chain && currentFrame && captureFootLock(nodes, currentFrame, chain.end.id));
+
+  useEffect(() => { setIkMessage(null); }, [selectedNodeId, currentFrame?.id, activeTool]);
 
   const render = useCallback(() => {
     const canvas = canvasRef.current;
@@ -246,8 +290,8 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
             context.strokeStyle = '#9ea9ff';
             context.lineWidth = 1 / zoom;
             if (drawBounds) context.strokeRect(-anchor.x - 2 / zoom, -anchor.y - 2 / zoom, asset.width + 4 / zoom, asset.height + 4 / zoom);
-            if (showPivot || activeTool === 'pivot') {
-              context.strokeStyle = activeTool === 'pivot' ? '#ffc578' : '#aeb7ff';
+            if (showPivot && activeTool !== 'pivot' && activeTool !== 'move') {
+              context.strokeStyle = '#aeb7ff';
               context.beginPath();
               context.moveTo(-5 / zoom, 0); context.lineTo(5 / zoom, 0);
               context.moveTo(0, -5 / zoom); context.lineTo(0, 5 / zoom);
@@ -255,20 +299,6 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
               context.beginPath();
               context.arc(0, 0, 3 / zoom, 0, Math.PI * 2);
               context.stroke();
-            }
-            if (activeTool === 'rotate') {
-              const handleY = -anchor.y - 10 / zoom;
-              context.beginPath();
-              context.moveTo(0, -anchor.y); context.lineTo(0, handleY);
-              context.stroke();
-              context.fillStyle = '#ffa96f';
-              context.fillRect(-2 / zoom, handleY - 2 / zoom, 4 / zoom, 4 / zoom);
-            }
-            if (activeTool === 'scale') {
-              const handleX = asset.width - anchor.x + 4 / zoom;
-              const handleY = asset.height - anchor.y + 4 / zoom;
-              context.fillStyle = '#72d9bb';
-              context.fillRect(handleX - 2 / zoom, handleY - 2 / zoom, 4 / zoom, 4 / zoom);
             }
             context.restore();
           };
@@ -339,57 +369,6 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
         const node = nodes[id];
         if (node) drawNode(node, frame, showSelection, matrixCache);
         });
-      // Move and pivot tools mark node origins; the selected node also shows its world coordinates.
-      if (showSelection && (activeTool === 'move' || activeTool === 'pivot')) {
-        orderedNodes(nodes, roots).forEach((id) => {
-          const node = nodes[id];
-          if (!node) return;
-          const selected = id === selectedNodeId;
-          if (!selected && activeTool === 'pivot') {
-            const nodeState = frameStateFor(node, frame);
-            if (!node.visible || !nodeState.visible) return;
-            const world = getWorldMatrix(nodes, frame, id, matrixCache);
-            const size = 4 / zoom;
-            context.save();
-            context.globalAlpha = 0.55;
-            context.strokeStyle = '#aeb7ff';
-            context.lineWidth = 1 / zoom;
-            context.beginPath();
-            context.moveTo(world.e - size, world.f); context.lineTo(world.e + size, world.f);
-            context.moveTo(world.e, world.f - size); context.lineTo(world.e, world.f + size);
-            context.stroke();
-            context.restore();
-            return;
-          }
-          if (!selected) return;
-          const nodeState = frameStateFor(node, frame);
-          if (!node.visible || !nodeState.visible) return;
-          const world = getWorldMatrix(nodes, frame, id, matrixCache);
-          const size = 6 / zoom;
-          context.save();
-          context.strokeStyle = '#ffc578';
-          context.lineWidth = 1 / zoom;
-          context.beginPath();
-          context.moveTo(world.e - size, world.f); context.lineTo(world.e + size, world.f);
-          context.moveTo(world.e, world.f - size); context.lineTo(world.e, world.f + size);
-          context.stroke();
-          context.beginPath();
-          context.arc(world.e, world.f, 3 / zoom, 0, Math.PI * 2);
-          context.stroke();
-          const name = node.name.length > 16 ? `${node.name.slice(0, 15)}…` : node.name;
-          const label = `${name}  ${Math.round(world.e)}, ${Math.round(world.f)}`;
-          context.font = `${10 / zoom}px "Segoe UI", system-ui, sans-serif`;
-          const labelWidth = context.measureText(label).width;
-          const padding = 3 / zoom;
-          const labelX = world.e + 9 / zoom;
-          const labelTop = world.f - 17 / zoom;
-          context.fillStyle = 'rgba(12, 14, 20, 0.82)';
-          context.fillRect(labelX, labelTop, labelWidth + padding * 2, 14 / zoom);
-          context.fillStyle = selected ? '#ffe0a8' : '#dfe4ff';
-          context.fillText(label, labelX + padding, labelTop + 10.5 / zoom);
-          context.restore();
-        });
-      }
       context.restore();
     };
     if (onionSkinEnabled) {
@@ -407,8 +386,103 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
         context.restore();
       }
     }
+    const frame = frames[currentFrameIndex];
+    const selectedNode = selectedNodeId ? nodes[selectedNodeId] : undefined;
+    if (frame && selectedNode && !isPlaying) {
+      const state = frameStateFor(selectedNode, frame);
+      const id = nodeSpriteIdForFrame(selectedNode, state);
+      const matrix = displayMatrix(getWorldMatrix(nodes, frame, selectedNode.id, new Map()), settings.pixelPerfectRotation, settings.pixelGridSize);
+      const control = nodeControl(activeTool, selectedNode, state, matrix, id ? assets[id] : undefined, zoom);
+      if ((activeTool === 'move' || activeTool === 'rotate') && !selectedNode.locked && selectedNode.visible && state.visible) {
+        drawGizmo(context, activeTool, { x: matrix.e, y: matrix.f }, zoom, { x: matrix.a, y: matrix.b }, activeGizmo);
+      } else if (control) {
+        const { center, edge } = control;
+        const color = activeTool === 'scale' ? '#72d9bb' : '#ffc578';
+        context.strokeStyle = color;
+        context.lineWidth = 1.5 / zoom;
+        if (edge) {
+          context.beginPath();
+          context.moveTo(edge.x, edge.y);
+          context.lineTo(center.x, center.y);
+          context.stroke();
+        }
+        const size = 5 / zoom;
+        context.beginPath();
+        if (activeTool === 'scale') context.rect(center.x - size, center.y - size, size * 2, size * 2);
+        else context.arc(center.x, center.y, size, 0, Math.PI * 2);
+        context.fillStyle = '#17191f';
+        context.fill();
+        context.stroke();
+        if (!edge) {
+          const line = 8 / zoom;
+          context.beginPath();
+          context.moveTo(center.x - line, center.y); context.lineTo(center.x + line, center.y);
+          context.moveTo(center.x, center.y - line); context.lineTo(center.x, center.y + line);
+          context.stroke();
+        }
+      }
+    }
+    if (frame && !isPlaying && (activeTool === 'ik' || activeTool === 'move')) {
+      const locks = activeFootLocks(nodes, frame);
+      const selectedChain = activeTool === 'ik' && selectedNodeId ? ikChain(nodes, selectedNodeId) : null;
+      const drawMarker = (point: Vec2, color: string, size: number) => {
+        context.beginPath();
+        context.arc(point.x, point.y, size / zoom, 0, Math.PI * 2);
+        context.fillStyle = '#17191f';
+        context.fill();
+        context.strokeStyle = color;
+        context.stroke();
+      };
+      context.lineWidth = 1.5 / zoom;
+      if (selectedChain) {
+        const points = [selectedChain.upper, selectedChain.lower, selectedChain.end].map((node) => nodePivotWorld(nodes, frame, node.id));
+        context.beginPath();
+        context.moveTo(points[0].x, points[0].y);
+        points.slice(1).forEach((point) => context.lineTo(point.x, point.y));
+        context.strokeStyle = '#7ae1bf';
+        context.stroke();
+        points.slice(0, 2).forEach((point) => drawMarker(point, '#7ae1bf', 3));
+        if (captureFootLock(nodes, frame, selectedChain.end.id) && !locks.some(([id]) => id === selectedChain.end.id)) {
+          const world = getWorldMatrix(nodes, frame, selectedChain.end.id, new Map());
+          drawGizmo(context, 'ik', points[2], zoom, { x: world.a, y: world.b }, activeGizmo);
+        }
+        const handle = captureFootLock(nodes, frame, selectedChain.end.id) && bendHandle(points[0], points[1], points[2], zoom);
+        if (handle) {
+          context.strokeStyle = bending ? '#ffe69c' : '#bfadff';
+          context.beginPath();
+          context.moveTo(points[1].x, points[1].y);
+          context.lineTo(handle.x, handle.y);
+          context.setLineDash([3 / zoom, 3 / zoom]);
+          context.stroke();
+          context.setLineDash([]);
+          const size = 6 / zoom;
+          context.beginPath();
+          context.moveTo(handle.x, handle.y - size);
+          context.lineTo(handle.x + size, handle.y);
+          context.lineTo(handle.x, handle.y + size);
+          context.lineTo(handle.x - size, handle.y);
+          context.closePath();
+          context.fillStyle = '#17191f';
+          context.fill();
+          context.stroke();
+        }
+      }
+      for (const [id, lock] of locks) {
+        const actual = nodePivotWorld(nodes, frame, id);
+        if (Math.hypot(actual.x - lock.point.x, actual.y - lock.point.y) > .01) {
+          context.beginPath();
+          context.moveTo(actual.x, actual.y);
+          context.lineTo(lock.point.x, lock.point.y);
+          context.strokeStyle = '#ffbf75';
+          context.setLineDash([3 / zoom, 3 / zoom]);
+          context.stroke();
+          context.setLineDash([]);
+        }
+        drawMarker(lock.point, '#ffbf75', 5);
+      }
+    }
     context.restore();
-  }, [activeTool, assets, currentFrameIndex, frames, nodes, onionSkinEnabled, pan.x, pan.y, roots, selectedNodeId, settings, showGrid, showPivot, zoom]);
+  }, [activeGizmo, activeTool, assets, bending, currentFrameIndex, frames, isPlaying, nodes, onionSkinEnabled, pan.x, pan.y, roots, selectedNodeId, settings, showGrid, showPivot, zoom]);
 
   useEffect(() => {
     render();
@@ -418,17 +492,24 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
   }, [render]);
 
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => { if (event.code === 'Space') setSpaceDown(true); };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.code === 'Space' && !event.isComposing && !isEditingText(event.target)) setSpaceDown(true);
+    };
     const onKeyUp = (event: KeyboardEvent) => { if (event.code === 'Space') setSpaceDown(false); };
+    const resetSpace = () => setSpaceDown(false);
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
-    return () => { window.removeEventListener('keydown', onKeyDown); window.removeEventListener('keyup', onKeyUp); };
+    window.addEventListener('blur', resetSpace);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', resetSpace);
+    };
   }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if (event.defaultPrevented || event.isComposing || event.altKey || isEditingText(event.target)) return;
       const key = event.key.toLowerCase();
       if (event.ctrlKey || event.metaKey) {
         if (key === 'd' && selectedNodeId) { event.preventDefault(); duplicateNode(selectedNodeId); }
@@ -436,10 +517,8 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
         if (key === 'y') { event.preventDefault(); redoTransform(); }
         return;
       }
-      if (key === 'w') { event.preventDefault(); setActiveTool('move'); }
-      if (key === 'r') { event.preventDefault(); setActiveTool('rotate'); }
-      if (key === 's') { event.preventDefault(); setActiveTool('scale'); }
-      if (key === 'p') { event.preventDefault(); setActiveTool('pivot'); }
+      const tool = transformToolForKey(event);
+      if (tool) { event.preventDefault(); setActiveTool(tool); }
       if (event.key === 'Delete' && selectedNodeId) { event.preventDefault(); deleteNode(selectedNodeId); }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -467,10 +546,48 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
       const asset = assetId ? assets[assetId] : undefined;
       if (!node || !asset || !node.visible || !frameStateFor(node, frame).visible) continue;
       const anchor = effectiveSpriteAnchor(asset, node.pivot);
-      const local = inverseTransformPoint(getWorldMatrix(nodes, frame, id, cache), worldPoint);
+      const matrix = displayMatrix(getWorldMatrix(nodes, frame, id, cache), settings.pixelPerfectRotation, settings.pixelGridSize);
+      const local = inverseTransformPoint(matrix, worldPoint);
       if (local && local.x >= -anchor.x && local.x <= asset.width - anchor.x && local.y >= -anchor.y && local.y <= asset.height - anchor.y) return id;
     }
     return null;
+  };
+
+  const finishPointer = (event: React.PointerEvent<HTMLDivElement>, cancelled = false) => {
+    if (dragStart.current?.pointerId === event.pointerId) {
+      dragStart.current = null;
+      setIsPanning(false);
+    }
+    if (ikDrag.current?.pointerId === event.pointerId) {
+      ikDrag.current = null;
+      setActiveGizmo(null);
+      setBending(false);
+      commitTransform();
+    }
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    setActiveGizmo(null);
+    if (drag.tool !== 'pivot') {
+      commitTransform();
+      return;
+    }
+    const node = nodes[drag.nodeId];
+    const asset = drag.pivotAsset;
+    const point = !cancelled && pointerToWorld(event);
+    if (!node || !asset || !point) return;
+    const start = inverseTransformPoint(drag.nodeMatrix, drag.startWorld);
+    const end = inverseTransformPoint(drag.nodeMatrix, point);
+    if (!start || !end) return;
+    const anchor = effectiveSpriteAnchor(asset, node.pivot);
+    const next = {
+      x: Math.min(asset.width, Math.max(0, Math.round(anchor.x + end.x - start.x))),
+      y: Math.min(asset.height, Math.max(0, Math.round(anchor.y + end.y - start.y))),
+    };
+    if (next.x === anchor.x && next.y === anchor.y) return;
+    // Change the anchor only after a real drag, compensating the pose so pixels stay put.
+    if (asset.anchor) setAssetAnchorKeepingPixels(asset.id, node.id, next);
+    else updateNodePivot(node.id, next);
   };
 
   return (
@@ -487,81 +604,161 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
       </div>
       <div
         ref={stageRef}
+        tabIndex={-1}
         className={`canvas-stage ${spaceDown || isPanning ? 'pan-ready' : ''} tool-${activeTool}`}
         onWheel={(event) => { event.preventDefault(); setZoom((value) => Math.min(16, Math.max(1, value + (event.deltaY < 0 ? 1 : -1)))); }}
         onContextMenu={(event) => event.preventDefault()}
         onAuxClick={(event) => event.preventDefault()}
         onPointerDown={(event) => {
+          if (ikDrag.current || dragRef.current || dragStart.current) return;
+          if (event.button !== 0 && event.button !== 1) return;
+          event.currentTarget.focus({ preventScroll: true });
           if (spaceDown || event.button === 1) {
             event.preventDefault();
             event.currentTarget.setPointerCapture(event.pointerId);
-            dragStart.current = { x: event.clientX, y: event.clientY, panX: pan.x, panY: pan.y };
+            dragStart.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, panX: pan.x, panY: pan.y };
             setIsPanning(true);
             return;
           }
           const frame = frames[currentFrameIndex];
           const worldPoint = pointerToWorld(event);
           if (!frame || !worldPoint) return;
-          const hitNodeId = hitTest(worldPoint, frame);
-          if (activeTool === 'select') {
-            selectNode(hitNodeId);
+          const selectUnderPointer = () => selectNode(hitTest(worldPoint, frame));
+          if (activeTool === 'select' || isPlaying) {
+            selectUnderPointer();
+            return;
+          }
+          if (activeTool === 'ik') {
+            const end = chain && canSolveIk ? nodePivotWorld(nodes, frame, chain.end.id) : null;
+            if (chain && end) {
+              const root = nodePivotWorld(nodes, frame, chain.upper.id);
+              const joint = nodePivotWorld(nodes, frame, chain.lower.id);
+              const handle = bendHandle(root, joint, end, zoom);
+              if (handle && hitTransformHandle(worldPoint, handle, zoom)) {
+                if (!beginIk(chain.end.id, 'bend')) {
+                  setIkMessage('Unlock the overlapping IK chain before changing the bend.');
+                  return;
+                }
+                event.currentTarget.setPointerCapture(event.pointerId);
+                const side = bendDistance(root, end, handle) < 0 ? -1 : 1;
+                ikDrag.current = { pointerId: event.pointerId, kind: 'bend', root, tip: end, side };
+                setBending(true);
+                setIkMessage(null);
+                return;
+              }
+            }
+            const part = end && chain && !activeFootLocks(nodes, frame).some(([id]) => id === chain.end.id)
+              ? hitGizmo('ik', worldPoint, end, zoom) : null;
+            if (!chain || !part) {
+              selectUnderPointer();
+              return;
+            }
+            if (part === 'ring') {
+              const store = useProjectStore.getState();
+              const selectedFrames = new Set(inspectorFrameIds(store));
+              if (store.frames.some((item) => selectedFrames.has(item.id) && activeFootLocks(nodes, item)
+                .some(([id]) => isAncestor(nodes, chain.end.id, id)))) {
+                setIkMessage('Unlock the affected foot before rotating this tip.');
+                return;
+              }
+              const cache = new Map<string, Matrix>();
+              const nodeMatrix = getWorldMatrix(nodes, frame, chain.end.id, cache);
+              const parentMatrix = getWorldMatrix(nodes, frame, chain.lower.id, cache);
+              const startState = frameStateFor(chain.end, frame);
+              beginTransform(chain.end.id);
+              event.currentTarget.setPointerCapture(event.pointerId);
+              dragRef.current = { pointerId: event.pointerId, tool: 'rotate', nodeId: chain.end.id, startWorld: worldPoint,
+                parentMatrix, nodeMatrix, startState, rotationLastPoint: worldPoint, rotationDegrees: startState.rotation, startScaleAxes: { x: 0, y: 0 } };
+              setActiveGizmo('ring');
+              setIkMessage(null);
+              return;
+            }
+            if (!beginIk(chain.end.id)) {
+              setIkMessage('Unlock the foot or overlapping IK chain before dragging.');
+              return;
+            }
+            setIkMessage(null);
+            event.currentTarget.setPointerCapture(event.pointerId);
+            ikDrag.current = { pointerId: event.pointerId, kind: 'position', start: worldPoint };
+            setActiveGizmo('center');
             return;
           }
           const node = selectedNodeId ? nodes[selectedNodeId] : null;
-          if (!node || node.locked) return;
+          if (!node) {
+            selectUnderPointer();
+            return;
+          }
           const cache = new Map<string, Matrix>();
           const nodeMatrix = getWorldMatrix(nodes, frame, node.id, cache);
           const parentMatrix = node.parentId ? getWorldMatrix(nodes, frame, node.parentId, cache) : identityMatrix;
           const startState = frameStateFor(node, frame);
-          const startLocal = inverseTransformPoint(nodeMatrix, worldPoint);
-          if (activeTool === 'pivot' && !startLocal) return;
-          if (activeTool === 'pivot' && startLocal) {
-            const assetId = nodeSpriteIdForFrame(node, startState);
-            const asset = assetId ? assets[assetId] : undefined;
-            if (!asset) return;
-            const anchor = effectiveSpriteAnchor(asset, node.pivot);
-            const nextAnchor = {
-              x: Math.min(asset.width, Math.max(0, Math.round(anchor.x + startLocal.x))),
-              y: Math.min(asset.height, Math.max(0, Math.round(anchor.y + startLocal.y))),
-            };
-            // Re-anchor in place: with a custom anchor both the anchor and the node pose compensate,
-            // otherwise the shared node pivot moves and already keeps pixels fixed.
-            if (asset.anchor) setAssetAnchorKeepingPixels(asset.id, node.id, nextAnchor);
-            else updateNodePivot(node.id, nextAnchor);
+          const assetId = nodeSpriteIdForFrame(node, startState);
+          const asset = assetId ? assets[assetId] : undefined;
+          const shown = displayMatrix(nodeMatrix, settings.pixelPerfectRotation, settings.pixelGridSize);
+          const control = nodeControl(activeTool, node, startState, shown, asset, zoom);
+          const usesGizmo = activeTool === 'move' || activeTool === 'rotate';
+          const part = usesGizmo && !node.locked && node.visible && startState.visible
+            ? hitGizmo(activeTool, worldPoint, { x: shown.e, y: shown.f }, zoom) : null;
+          if (!part && !hitTransformHandle(worldPoint, control?.center ?? null, zoom)) {
+            selectUnderPointer();
             return;
           }
           event.currentTarget.setPointerCapture(event.pointerId);
+          const rotationOffset = activeTool === 'rotate' ? { x: nodeMatrix.e - shown.e, y: nodeMatrix.f - shown.f } : undefined;
           dragRef.current = {
+            pointerId: event.pointerId,
             tool: activeTool,
             nodeId: node.id,
             startWorld: worldPoint,
             parentMatrix,
             nodeMatrix,
             startState: { ...startState, position: { ...startState.position }, scale: { ...startState.scale } },
-            rotationLastPoint: worldPoint,
+            rotationLastPoint: rotationOffset ? { x: worldPoint.x + rotationOffset.x, y: worldPoint.y + rotationOffset.y } : worldPoint,
             rotationDegrees: startState.rotation,
+            rotationOffset,
+            moveAxis: activeTool === 'move' ? part ?? 'plane' : undefined,
             startScaleAxes: pointInNodeScaleAxes(parentMatrix, startState, worldPoint) ?? { x: 0, y: 0 },
+            pivotAsset: activeTool === 'pivot' ? asset : undefined,
           };
-          beginTransform(node.id);
+          setActiveGizmo(part);
+          if (activeTool !== 'pivot') beginTransform(node.id);
         }}
         onPointerMove={(event) => {
           if (dragStart.current) {
+            if (event.pointerId !== dragStart.current.pointerId) return;
             setPan({ x: dragStart.current.panX + event.clientX - dragStart.current.x, y: dragStart.current.panY + event.clientY - dragStart.current.y });
             return;
           }
           const drag = dragRef.current;
           const worldPoint = pointerToWorld(event);
-          if (!drag || !worldPoint) return;
-          const snap = (value: number, increment = 1) => snapEnabled ? Math.round(value / increment) * increment : Math.round(value);
+          const ik = ikDrag.current;
+          if (ik) {
+            if (worldPoint && event.pointerId === ik.pointerId) {
+              if (ik.kind === 'bend') {
+                const distance = bendDistance(ik.root, ik.tip, worldPoint);
+                const side = distance < 0 ? -1 : 1;
+                if (Math.abs(distance) * zoom > 4 && side !== ik.side) {
+                  ik.side = side;
+                  dragIkBend(side);
+                }
+              } else {
+                const snapDelta = (value: number) => snapEnabled ? Math.round(value / settings.gridSize) * settings.gridSize : value;
+                dragIk({ x: snapDelta(worldPoint.x - ik.start.x), y: snapDelta(worldPoint.y - ik.start.y) });
+              }
+            }
+            return;
+          }
+          if (!drag || drag.pointerId !== event.pointerId || !worldPoint) return;
           if (drag.tool === 'move') {
-            const start = inverseTransformPoint(drag.parentMatrix, drag.startWorld);
-            const current = inverseTransformPoint(drag.parentMatrix, worldPoint);
-            if (!start || !current) return;
-            updateNodeFrame(drag.nodeId, { position: { x: snap(drag.startState.position.x + current.x - start.x, settings.gridSize), y: snap(drag.startState.position.y + current.y - start.y, settings.gridSize) } });
+            const delta = { x: worldPoint.x - drag.startWorld.x, y: worldPoint.y - drag.startWorld.y };
+            const position = moveGizmoPosition(drag.parentMatrix, drag.startState.position, delta, drag.moveAxis ?? 'plane',
+              snapEnabled ? settings.gridSize : settings.pixelPerfectRotation ? settings.pixelGridSize : 0);
+            if (position) updateNodeFrame(drag.nodeId, { position });
           }
           if (drag.tool === 'rotate') {
-            const delta = rotationDragDelta(drag.parentMatrix, drag.startState.position, drag.rotationLastPoint, worldPoint);
-            drag.rotationLastPoint = worldPoint;
+            const point = drag.rotationOffset ? { x: worldPoint.x + drag.rotationOffset.x, y: worldPoint.y + drag.rotationOffset.y } : worldPoint;
+            const delta = rotationDragDelta(drag.parentMatrix, drag.startState.position, drag.rotationLastPoint, point);
+            drag.rotationLastPoint = point;
             if (delta === null) return;
             drag.rotationDegrees += delta;
             updateNodeFrame(drag.nodeId, { rotation: drag.rotationDegrees });
@@ -577,21 +774,33 @@ export function AnimationCanvas({ showGrid }: AnimationCanvasProps) {
             });
           }
         }}
-        onPointerUp={() => {
-          dragStart.current = null;
-          setIsPanning(false);
-          if (dragRef.current) commitTransform();
-          dragRef.current = null;
-        }}
-        onPointerCancel={() => {
-          dragStart.current = null;
-          setIsPanning(false);
-          if (dragRef.current) commitTransform();
-          dragRef.current = null;
-        }}
+        onPointerUp={(event) => finishPointer(event)}
+        onPointerCancel={(event) => finishPointer(event, true)}
+        onLostPointerCapture={(event) => finishPointer(event, true)}
       >
         <canvas ref={canvasRef} />
-        <div className="canvas-help"><kbd>Scroll</kbd> zoom <span>•</span> <kbd>Middle mouse</kbd> or <kbd>Space + drag</kbd> pan</div>
+        {activeTool === 'ik' && <div className="ik-panel" onPointerDown={(event) => event.stopPropagation()}>
+          {chain?.end.ikBinding && <strong className="ik-panel-label">{chain.end.ikBinding.name}</strong>}
+          <div className="ik-panel-label" title={chain ? `${chain.upper.name} → ${chain.lower.name} → ${chain.end.name}` : undefined}>
+            {chain ? `${chain.upper.name} → ${chain.lower.name} → ${chain.end.name}` : 'Select a wrist, ankle or tip in the node tree'}
+          </div>
+          <div className="ik-panel-actions">
+            <button type="button" className="tool-button" disabled={!selectedNodeId || (!canSolveIk && !allSelectedLocked)} aria-pressed={allSelectedLocked}
+              onClick={() => selectedNodeId && setIkMessage(toggleFootLock(selectedNodeId))}>{allSelectedLocked ? 'Unlock foot' : 'Lock foot'}</button>
+            <button type="button" className="tool-button" disabled={!canSolveIk}
+              onClick={() => chain && setIkMessage(reverseIkBend(chain.end.id))}>Reverse bend</button>
+          </div>
+          <div role="status" className={ikMessage ? 'ik-panel-error' : 'ik-panel-hint'}>
+            {ikMessage ?? (!chain ? 'Choose a valid chain in IK bindings.' : allSelectedLocked ? 'Foot pinned. Drag the purple diamond to change the bend.' : canSolveIk ? 'Center: move · Ring: rotate · Purple diamond: bend' : 'Give both bones a nonzero length.')}
+          </div>
+          <IkBindings onMessage={setIkMessage} />
+        </div>}
+        <div className="canvas-help">
+          {activeTool === 'pivot' && <><span>Drag pivot to reposition</span><span>•</span></>}
+          {activeTool === 'move' && <><span>Drag X / Y or the plane square</span><span>•</span></>}
+          {activeTool === 'rotate' && <><span>Drag the rotation ring</span><span>•</span></>}
+          <kbd>Scroll</kbd> zoom <span>•</span> <kbd>Middle mouse</kbd> or <kbd>Space + drag</kbd> pan
+        </div>
       </div>
     </main>
   );

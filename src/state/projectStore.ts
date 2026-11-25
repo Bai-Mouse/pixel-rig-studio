@@ -1,10 +1,11 @@
 import { create } from 'zustand';
-import { nodeSpriteIds, type AnimationFrame, type AnimationImportOptions, type AnimationTemplate, type AssetId, type FrameGroup, type NodeFrameState, type NodeId, type ProjectSettings, type RigNode, type RotationSnapAngle, type SpriteAsset, type TransformTool, type TweenProperties, type Vec2 } from '../types/project';
+import { nodeSpriteIds, type AnimationFrame, type AnimationImportOptions, type AnimationTemplate, type AssetId, type FrameGroup, type IkBinding, type NodeFrameState, type NodeId, type ProjectSettings, type RigNode, type RotationSnapAngle, type SpriteAsset, type TransformTool, type TweenProperties, type Vec2 } from '../types/project';
 import type { AnimationDataFile, SerializableProject } from '../export/projectSerializer';
 import { normalizeProjectSettings } from '../export/projectSerializer';
 import { createCharacterTemplateProject as buildCharacterTemplate } from './characterTemplate';
 import { applyEditPlan, type EditPlan, type EditableScene } from '../codex/editPlan';
 import { clampAnchor, effectiveSpriteAnchor } from '../utils/spriteAnchor';
+import { activeFootLocks, captureFootLock, ikHierarchy, isAncestor, moveWithFootLocks, nodePivotWorld, poseIkBend, solveTwoBone } from './twoBoneIk';
 
 type FrameStatePatch = Omit<Partial<NodeFrameState>, 'position' | 'scale'> & {
   position?: Partial<Vec2>;
@@ -74,7 +75,24 @@ interface TimelineHistoryEntry {
   label: string;
 }
 
-type HistoryEntry = TransformHistoryEntry | PivotHistoryEntry | NodeFramesHistoryEntry | CodexHistoryEntry | AssetHistoryEntry | AnchorHistoryEntry | TimelineHistoryEntry;
+interface RigPoseHistoryEntry {
+  rigBefore: AnimationFrame[];
+  rigAfter: AnimationFrame[];
+}
+interface IkBindingHistoryEntry {
+  bindingEnd: NodeId;
+  bindingBefore?: IkBinding;
+  bindingAfter?: IkBinding;
+}
+type HistoryEntry = TransformHistoryEntry | PivotHistoryEntry | NodeFramesHistoryEntry | CodexHistoryEntry | AssetHistoryEntry | AnchorHistoryEntry | TimelineHistoryEntry | RigPoseHistoryEntry | IkBindingHistoryEntry;
+
+function withIkBinding(nodes: Record<NodeId, RigNode>, id: NodeId, binding?: IkBinding) {
+  if (!nodes[id]) return nodes;
+  const node = { ...nodes[id] };
+  if (binding) node.ikBinding = binding;
+  else delete node.ikBinding;
+  return { ...nodes, [id]: node };
+}
 
 function restoreAssets(current: Record<AssetId, SpriteAsset>, patch: Record<AssetId, SpriteAsset | null>) {
   const result = { ...current };
@@ -88,6 +106,8 @@ interface TransformSession {
   before: NodeFrameState;
   frameIds: string[];
   frameStates: Array<NodeFrameState | null>;
+  poseFrames?: AnimationFrame[];
+  ik?: 'move' | 'bend';
 }
 
 interface ProjectState {
@@ -102,12 +122,13 @@ interface ProjectState {
   currentFrameIndex: number;
   selectedFrameIds: string[];
   frameSelectionAnchorId: string | null;
-  inspectorSession: { nodeId: NodeId; frameIds: string[]; before: Array<NodeFrameState | null> } | null;
+  inspectorSession: { nodeId: NodeId; frameIds: string[]; before: Array<NodeFrameState | null>; poseFrames?: AnimationFrame[] } | null;
   beginInspectorEdit: (nodeId: NodeId) => void;
   updateInspectorFrame: (nodeId: NodeId, patch: FrameStatePatch) => void;
   commitInspectorEdit: () => void;
   isPlaying: boolean;
   playbackGroupId: string | null;
+  playbackFrameIds: string[] | null;
   isLooping: boolean;
   onionSkinEnabled: boolean;
   fps: number;
@@ -145,6 +166,7 @@ interface ProjectState {
   toggleNodeLock: (id: NodeId) => void;
   selectFrame: (index: number, mode?: 'single' | 'toggle' | 'range') => void;
   togglePlayback: () => void;
+  toggleSelectionPlayback: () => void;
   advanceFrame: () => void;
   toggleLooping: () => void;
   toggleOnionSkin: () => void;
@@ -153,6 +175,7 @@ interface ProjectState {
   duplicateFrame: () => void;
   deleteFrame: () => void;
   moveFrame: (fromIndex: number, toIndex: number) => void;
+  moveFrames: (frameIds: string[], boundary: number) => boolean;
   insertTweenFrames: (startIndex: number, endIndex: number, count: number, properties: TweenProperties) => void;
   groupFrames: (frameIndexes: number[], name: string, color: string) => void;
   /** Adds frames to an existing group instead of creating a new one. */
@@ -171,6 +194,12 @@ interface ProjectState {
   setPixelGridSize: (size: number) => void;
   setRotationSnapAngle: (angle: RotationSnapAngle) => void;
   beginTransform: (nodeId: NodeId) => void;
+  setIkBinding: (endId: NodeId, name: string | null) => string | null;
+  beginIk: (endId: NodeId, mode?: 'move' | 'bend') => boolean;
+  dragIk: (delta: Vec2) => void;
+  dragIkBend: (side: -1 | 1) => void;
+  reverseIkBend: (endId: NodeId) => string | null;
+  toggleFootLock: (endId: NodeId) => string | null;
   updateNodeFrame: (nodeId: NodeId, patch: FrameStatePatch) => void;
   syncNodeFrameToAllFrames: (nodeId: NodeId) => void;
   commitTransform: () => void;
@@ -225,6 +254,7 @@ function cloneFrame(frame: AnimationFrame): AnimationFrame {
     id: `frame-${crypto.randomUUID()}`,
     canvasData: frame.canvasData,
     group: frame.group ? { ...frame.group } : undefined,
+    ...(frame.footLocks ? { footLocks: structuredClone(frame.footLocks) } : {}),
     nodeStates: Object.fromEntries(
       Object.entries(frame.nodeStates).map(([nodeId, state]) => [
         nodeId,
@@ -524,6 +554,7 @@ function clearedTimelineState() {
   return {
     isPlaying: false,
     playbackGroupId: null,
+    playbackFrameIds: null,
     selectedFrameIds: [] as string[],
     frameSelectionAnchorId: null,
     inspectorSession: null,
@@ -578,6 +609,35 @@ function restoreTimeline(snapshot: TimelineSnapshot) {
     selectedFrameIds: snapshot.selectedFrameIds.filter((id) => frames.some((frame) => frame.id === id)),
     frameSelectionAnchorId: null,
   };
+}
+
+function poseHistory(before: AnimationFrame[], frames: AnimationFrame[]) {
+  const byId = new Map(frames.map((frame) => [frame.id, frame]));
+  const changed = before.filter((frame) => {
+    const next = byId.get(frame.id);
+    return next && (JSON.stringify(frame.nodeStates) !== JSON.stringify(next.nodeStates) || frame.footLocks !== next.footLocks);
+  });
+  return changed.length ? { rigBefore: changed, rigAfter: changed.map((frame) => byId.get(frame.id)!) } : null;
+}
+
+function restoreRigPose(frames: AnimationFrame[], target: AnimationFrame[], previous: AnimationFrame[]) {
+  const pairs = new Map(target.map((frame, index) => [frame.id, { frame, previous: previous[index] }]));
+  return frames.map((current) => {
+    const pair = pairs.get(current.id);
+    if (!pair) return current;
+    const nodeStates = { ...current.nodeStates };
+    for (const id of new Set([...Object.keys(pair.frame.nodeStates), ...Object.keys(pair.previous.nodeStates)])) {
+      if (pair.frame.nodeStates[id] === pair.previous.nodeStates[id]) continue;
+      if (pair.frame.nodeStates[id]) nodeStates[id] = pair.frame.nodeStates[id];
+      else delete nodeStates[id];
+    }
+    const next = { ...current, nodeStates };
+    if (pair.frame.footLocks !== pair.previous.footLocks) {
+      if (pair.frame.footLocks) next.footLocks = pair.frame.footLocks;
+      else delete next.footLocks;
+    }
+    return next;
+  });
 }
 
 function framesForTemplate(state: Pick<ProjectState, 'nodes' | 'rootNodeIds' | 'frames' | 'currentFrameIndex'>, template: AnimationTemplate) {
@@ -645,6 +705,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   currentFrameIndex: 0,
   isPlaying: false,
   playbackGroupId: null,
+  playbackFrameIds: null,
   isLooping: true,
   onionSkinEnabled: false,
   fps: 12,
@@ -991,26 +1052,50 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
   togglePlayback: () =>
     set((state) => {
-      if (state.isPlaying) return { isPlaying: false, playbackGroupId: null };
+      if (state.isPlaying) return { isPlaying: false, playbackGroupId: null, playbackFrameIds: null };
       return {
         isPlaying: true,
         selectedFrameIds: [],
+        playbackFrameIds: null,
         playbackGroupId: state.frames[state.currentFrameIndex]?.group?.id ?? null,
       };
     }),
+  toggleSelectionPlayback: () => {
+    get().commitInspectorEdit();
+    get().commitTransform();
+    set((state) => {
+      if (state.isPlaying && state.playbackFrameIds) {
+        return { isPlaying: false, playbackFrameIds: null };
+      }
+      const selected = inspectorFrameIds(state);
+      const group = state.frames[state.currentFrameIndex]?.group;
+      const ids = selected.length > 1 || !group
+        ? selected
+        : state.frames.filter((frame) => frame.group?.id === group.id).map((frame) => frame.id);
+      if (ids.length < 2) return {};
+      return {
+        isPlaying: true, playbackGroupId: null, playbackFrameIds: ids,
+        currentFrameIndex: state.frames.findIndex((frame) => frame.id === ids[0]),
+      };
+    });
+  },
   advanceFrame: () =>
     set((state) => {
-      const playbackIndexes = state.playbackGroupId
+      if (!state.isPlaying) return {};
+      const selected = state.playbackFrameIds ? new Set(state.playbackFrameIds) : null;
+      const playbackIndexes = selected
+        ? state.frames.flatMap((frame, index) => selected.has(frame.id) ? [index] : [])
+        : state.playbackGroupId
         ? state.frames.flatMap((frame, index) => frame.group?.id === state.playbackGroupId ? [index] : [])
         : state.frames.map((_, index) => index);
-      if (!playbackIndexes.length) return { isPlaying: false, playbackGroupId: null };
+      if (!playbackIndexes.length) return { isPlaying: false, playbackGroupId: null, playbackFrameIds: null };
 
       const playbackPosition = playbackIndexes.indexOf(state.currentFrameIndex);
       if (playbackPosition < 0) return { currentFrameIndex: playbackIndexes[0] };
       if (playbackPosition < playbackIndexes.length - 1) {
         return { currentFrameIndex: playbackIndexes[playbackPosition + 1] };
       }
-      if (state.isLooping) return { currentFrameIndex: playbackIndexes[0] };
+      if (selected || state.isLooping) return { currentFrameIndex: playbackIndexes[0] };
       return { isPlaying: false, playbackGroupId: null };
     }),
   toggleLooping: () => set((state) => ({ isLooping: !state.isLooping })),
@@ -1024,14 +1109,27 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const next = { frames, currentFrameIndex: nextIndex, isPlaying: false };
       return { ...next, ...timelineHistory(state, next, 'Insert frame') };
     }),
-  duplicateFrame: () =>
+  duplicateFrame: () => {
+    get().commitInspectorEdit();
+    get().commitTransform();
     set((state) => {
-      const nextIndex = state.currentFrameIndex + 1;
+      const selected = new Set(inspectorFrameIds(state));
+      const originals = state.frames.filter((frame) => selected.has(frame.id));
+      if (!originals.length) return {};
+      const copies = originals.map(cloneFrame);
+      const insertionIndex = state.frames.lastIndexOf(originals[originals.length - 1]) + 1;
+      const activeCopyOffset = originals.indexOf(state.frames[state.currentFrameIndex]);
       const frames = [...state.frames];
-      frames.splice(nextIndex, 0, cloneFrame(frames[state.currentFrameIndex]));
-      const next = { frames, currentFrameIndex: nextIndex, isPlaying: false };
-      return { ...next, ...timelineHistory(state, next, 'Duplicate frame') };
-    }),
+      frames.splice(insertionIndex, 0, ...copies);
+      const selectedFrameIds = copies.map((frame) => frame.id);
+      const next = {
+        ...clearedTimelineState(), frames, selectedFrameIds,
+        currentFrameIndex: insertionIndex + activeCopyOffset,
+        frameSelectionAnchorId: copies[activeCopyOffset].id,
+      };
+      return { ...next, ...timelineHistory(state, next, copies.length > 1 ? `Duplicate ${copies.length} frames` : 'Duplicate frame') };
+    });
+  },
   deleteFrame: () =>
     set((state) => {
       // A multi-frame selection deletes every selected frame; otherwise only the current one.
@@ -1055,15 +1153,37 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       };
       return { ...next, ...timelineHistory(state, next, doomed.size > 1 ? `Delete ${doomed.size} frames` : 'Delete frame') };
     }),
-  moveFrame: (fromIndex, toIndex) =>
-    set((state) => {
-      if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= state.frames.length || toIndex >= state.frames.length) return {};
-      const frames = [...state.frames];
-      const [movedFrame] = frames.splice(fromIndex, 1);
-      frames.splice(toIndex, 0, movedFrame);
-      const next = { frames, currentFrameIndex: toIndex, isPlaying: false, transformSession: null };
-      return { ...next, ...timelineHistory(state, next, 'Move frame') };
-    }),
+  moveFrame: (fromIndex, toIndex) => {
+    const state = get();
+    if (fromIndex === toIndex || !state.frames[fromIndex] || !state.frames[toIndex]) return;
+    state.moveFrames([state.frames[fromIndex].id], toIndex + (fromIndex < toIndex ? 1 : 0));
+  },
+  moveFrames: (frameIds, boundary) => {
+    const state = get();
+    if (!Number.isInteger(boundary) || boundary < 0 || boundary > state.frames.length) return false;
+    const selected = new Set(frameIds);
+    const moved = state.frames.filter((frame) => selected.has(frame.id));
+    if (!moved.length || moved.length !== selected.size) return false;
+    const insertionIndex = state.frames.slice(0, boundary).filter((frame) => !selected.has(frame.id)).length;
+    const remaining = state.frames.filter((frame) => !selected.has(frame.id));
+    remaining.splice(insertionIndex, 0, ...moved);
+    if (remaining.every((frame, index) => frame === state.frames[index])) return false;
+
+    state.commitInspectorEdit();
+    state.commitTransform();
+    const current = get();
+    const activeId = current.frames[current.currentFrameIndex]?.id;
+    const focusedId = activeId && selected.has(activeId) ? activeId : moved[0].id;
+    const anchor = current.frameSelectionAnchorId;
+    const next = {
+      ...clearedTimelineState(), frames: remaining,
+      currentFrameIndex: remaining.findIndex((frame) => frame.id === focusedId),
+      selectedFrameIds: moved.map((frame) => frame.id),
+      frameSelectionAnchorId: anchor && selected.has(anchor) ? anchor : focusedId,
+    };
+    set({ ...next, ...timelineHistory(current, next, moved.length > 1 ? `Move ${moved.length} frames` : 'Move frame') });
+    return true;
+  },
   insertTweenFrames: (firstIndex, secondIndex, requestedCount, properties) =>
     set((state) => {
       const startIndex = Math.min(firstIndex, secondIndex);
@@ -1208,9 +1328,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         const index = startIndex + offset;
         const existing = frames[index];
         // Keep the original frame id, group and drawing layer: only the pose accumulates.
-        frames[index] = existing
-          ? { ...existing, nodeStates }
-          : { id: `frame-${crypto.randomUUID()}`, nodeStates };
+        const nextFrame = existing ? { ...existing, nodeStates } : { id: `frame-${crypto.randomUUID()}`, nodeStates };
+        if (offset) delete nextFrame.footLocks;
+        frames[index] = nextFrame;
         previousStates = nodeStates;
       });
       const next = { ...clearedTimelineState(), frames, currentFrameIndex: startIndex };
@@ -1225,6 +1345,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         frames[startIndex + offset] = existing
           ? { ...existing, canvasData: frame.canvasData, nodeStates: frame.nodeStates }
           : frame;
+        delete frames[startIndex + offset].footLocks;
       });
       const next = { ...clearedTimelineState(), frames, currentFrameIndex: startIndex };
       set({ ...next, ...timelineHistory(state, next, `Overwrite ${importedFrames.length} animation frames`) });
@@ -1261,15 +1382,130 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       if (!node || node.locked || !frame) return {};
       const before = frame.nodeStates[nodeId] ?? snapshotNode(node);
       const frameIds = inspectorFrameIds(state);
+      const poseFrames = state.frames.filter((item) => frameIds.includes(item.id));
+      const hasLockedFeet = poseFrames.some((item) => activeFootLocks(state.nodes, item)
+        .some(([endId]) => endId !== nodeId && isAncestor(state.nodes, nodeId, endId)));
       return {
         transformSession: { nodeId, frameIndex: state.currentFrameIndex, before: cloneFrameState(before), frameIds,
           frameStates: frameIds.map((id) => {
             const value = state.frames.find((item) => item.id === id)?.nodeStates[nodeId];
             return value ? cloneFrameState(value) : null;
-          }) },
+          }), ...(hasLockedFeet ? { poseFrames } : {}) },
         isPlaying: false, playbackGroupId: null,
       };
     });
+  },
+  setIkBinding: (endId, name) => {
+    get().commitInspectorEdit();
+    get().commitTransform();
+    const state = get();
+    const node = state.nodes[endId];
+    if (!node) return 'Select an endpoint.';
+    const chain = ikHierarchy(state.nodes, endId);
+    const label = name?.trim().slice(0, 48);
+    if (name !== null && (!chain || !label)) return 'Enter a name and select a tip below two joints.';
+    const binding = label && chain ? { name: label, upperId: chain.upper.id, lowerId: chain.lower.id } : undefined;
+    if (JSON.stringify(node.ikBinding) === JSON.stringify(binding)) return null;
+    const entry: IkBindingHistoryEntry = { bindingEnd: endId, bindingBefore: node.ikBinding, bindingAfter: binding };
+    set({ nodes: withIkBinding(state.nodes, endId, binding), transformHistory: [...state.transformHistory, entry], redoStack: [] });
+    return null;
+  },
+  beginIk: (endId, mode = 'move') => {
+    const state = get();
+    const frame = state.frames[state.currentFrameIndex];
+    const target = frame && captureFootLock(state.nodes, frame, endId);
+    if (!frame || !target || activeFootLocks(state.nodes, frame).some(([id, lock]) =>
+      !(mode === 'bend' && id === endId) && (isAncestor(state.nodes, lock.upperId, endId) || isAncestor(state.nodes, target.upperId, id)))) return false;
+    state.beginTransform(endId);
+    const current = get();
+    const session = current.transformSession;
+    if (!session) return false;
+    set({ transformSession: { ...session, ik: mode, poseFrames: current.frames.filter((item) => session.frameIds.includes(item.id)) } });
+    return true;
+  },
+  dragIk: (delta) => set((state) => {
+    const session = state.transformSession;
+    if (session?.ik !== 'move' || !session.poseFrames || !Number.isFinite(delta.x) || !Number.isFinite(delta.y)) return {};
+    const byId = new Map(session.poseFrames.map((frame) => [frame.id, frame]));
+    return { frames: state.frames.map((frame) => {
+      const original = byId.get(frame.id);
+      if (!original) return frame;
+      const start = captureFootLock(state.nodes, original, session.nodeId);
+      if (!start || activeFootLocks(state.nodes, original).some(([id, lock]) =>
+        isAncestor(state.nodes, lock.upperId, session.nodeId) || isAncestor(state.nodes, start.upperId, id))) return frame;
+      const target = { x: start.point.x + delta.x, y: start.point.y + delta.y };
+      const solved = !delta.x && !delta.y ? original
+        : solveTwoBone(state.nodes, original, session.nodeId, target, original, false, start.axis)?.frame;
+      return solved ? { ...frame, nodeStates: solved.nodeStates } : frame;
+    }) };
+  }),
+  dragIkBend: (side) => set((state) => {
+    const session = state.transformSession;
+    if (session?.ik !== 'bend' || !session.poseFrames) return {};
+    const originals = new Map(session.poseFrames.map((frame) => [frame.id, frame]));
+    return { frames: state.frames.map((frame) => {
+      const original = originals.get(frame.id);
+      if (!original) return frame;
+      const target = captureFootLock(state.nodes, original, session.nodeId);
+      if (!target || activeFootLocks(state.nodes, original).some(([id, lock]) => id !== session.nodeId
+        && (isAncestor(state.nodes, lock.upperId, session.nodeId) || isAncestor(state.nodes, target.upperId, id)))) return frame;
+      return { ...frame, nodeStates: poseIkBend(state.nodes, original, session.nodeId, side).nodeStates };
+    }) };
+  }),
+  reverseIkBend: (endId) => {
+    get().commitInspectorEdit();
+    get().commitTransform();
+    const state = get();
+    const selected = new Set(inspectorFrameIds(state));
+    const originals = state.frames.filter((frame) => selected.has(frame.id));
+    const frames = state.frames.map((frame) => {
+      if (!selected.has(frame.id)) return frame;
+      const target = activeFootLocks(state.nodes, frame).find(([id]) => id === endId)?.[1] ?? captureFootLock(state.nodes, frame, endId);
+      if (!target || activeFootLocks(state.nodes, frame).some(([id, lock]) => id !== endId
+        && (isAncestor(state.nodes, lock.upperId, endId) || isAncestor(state.nodes, target.upperId, id)))) return frame;
+      const solved = solveTwoBone(state.nodes, frame, endId, target.point, frame, true, target.axis);
+      return solved && solved.error <= .005 ? solved.frame : frame;
+    });
+    const history = poseHistory(originals, frames);
+    if (!history) return 'The selected pose cannot bend the other way at this target.';
+    set({ frames, transformHistory: [...state.transformHistory, history], redoStack: [], isPlaying: false, playbackGroupId: null });
+    return null;
+  },
+  toggleFootLock: (endId) => {
+    get().commitInspectorEdit();
+    get().commitTransform();
+    const state = get();
+    const frame = state.frames[state.currentFrameIndex];
+    if (!frame) return 'Select a frame first.';
+    const selected = new Set(inspectorFrameIds(state));
+    const originals = state.frames.filter((item) => selected.has(item.id));
+    const unlocking = originals.every((item) => Boolean(item.footLocks?.[endId]));
+    const target = unlocking ? null : captureFootLock(state.nodes, frame, endId);
+    if (!unlocking && !target) return 'Choose a wrist, ankle or tip below two unlocked joints with nonzero bone lengths.';
+    const replacements = new Map<string, AnimationFrame>();
+    for (const item of originals) {
+      const footLocks = { ...item.footLocks };
+      if (!target) {
+        delete footLocks[endId];
+        const updated = { ...item };
+        if (Object.keys(footLocks).length) updated.footLocks = footLocks; else delete updated.footLocks;
+        replacements.set(item.id, updated);
+        continue;
+      }
+      const overlapping = activeFootLocks(state.nodes, item).some(([id, other]) => id !== endId
+        && (isAncestor(state.nodes, other.upperId, endId) || isAncestor(state.nodes, target.upperId, id)));
+      if (overlapping) return 'Unlock the overlapping chain first.';
+      const end = nodePivotWorld(state.nodes, item, endId);
+      const solved = Math.hypot(end.x - target.point.x, end.y - target.point.y) <= .00001 && item === frame
+        ? { frame: item, error: 0 }
+        : solveTwoBone(state.nodes, item, endId, target.point, item, false, target.axis);
+      if (!solved || solved.error > .005) return `Frame ${state.frames.indexOf(item) + 1} cannot reach the lock point. Move the body closer or narrow the selection.`;
+      replacements.set(item.id, { ...solved.frame, footLocks: { ...footLocks, [endId]: target } });
+    }
+    const frames = state.frames.map((item) => replacements.get(item.id) ?? item);
+    const history = poseHistory(originals, frames);
+    if (history) set({ frames, transformHistory: [...state.transformHistory, history], redoStack: [], isPlaying: false, playbackGroupId: null });
+    return null;
   },
   updateNodeFrame: (nodeId, patch) => {
     if (get().transformSession?.nodeId !== nodeId) get().beginTransform(nodeId);
@@ -1286,7 +1522,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         if (index < 0) return frame;
         const base = session.frameStates[index] ?? snapshotNode(node);
         const current = frame.nodeStates[nodeId] ?? snapshotNode(node);
-        return { ...frame, nodeStates: { ...frame.nodeStates, [nodeId]: mergeFrameState(current, relativeTransformPatch(base, session.before, snappedPatch)) } };
+        const next = mergeFrameState(current, relativeTransformPatch(base, session.before, snappedPatch));
+        if (patch.position && activeFootLocks(state.nodes, frame).some(([endId]) => endId === nodeId)) return frame;
+        const original = session.poseFrames?.[index];
+        if (original && patch.position) return moveWithFootLocks(state.nodes, original, frame, nodeId, next.position);
+        return { ...frame, nodeStates: { ...frame.nodeStates, [nodeId]: next } };
       }) };
     });
   },
@@ -1296,9 +1536,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set((state) => {
       if (!state.nodes[nodeId] || state.nodes[nodeId].locked) return {};
       const frameIds = inspectorFrameIds(state);
+      const poseFrames = state.frames.filter((frame) => frameIds.includes(frame.id));
+      const hasLockedFeet = poseFrames.some((frame) => activeFootLocks(state.nodes, frame)
+        .some(([endId]) => endId !== nodeId && isAncestor(state.nodes, nodeId, endId)));
       return {
         inspectorSession: {
           nodeId, frameIds,
+          ...(hasLockedFeet ? { poseFrames } : {}),
           before: frameIds.map((id) => {
             const value = state.frames.find((frame) => frame.id === id)?.nodeStates[nodeId];
             return value ? cloneFrameState(value) : null;
@@ -1318,15 +1562,30 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const adjusted = patch.rotation !== undefined && angle > 0
         ? { ...patch, rotation: Math.round(patch.rotation / angle) * angle } : patch;
       return {
-        frames: state.frames.map((frame) => session.frameIds.includes(frame.id)
-          ? { ...frame, nodeStates: { ...frame.nodeStates, [nodeId]: mergeFrameState(frame.nodeStates[nodeId] ?? snapshotNode(node), adjusted) } }
-          : frame),
+        frames: state.frames.map((frame) => {
+          const index = session.frameIds.indexOf(frame.id);
+          if (index < 0) return frame;
+          const current = frame.nodeStates[nodeId] ?? snapshotNode(node);
+          const next = mergeFrameState(current, adjusted);
+          if (adjusted.position && activeFootLocks(state.nodes, frame).some(([endId]) => endId === nodeId)) return frame;
+          const updated = { ...frame, nodeStates: { ...frame.nodeStates, [nodeId]: next } };
+          const original = session.poseFrames?.[index];
+          if (original && adjusted.position) {
+            updated.nodeStates[nodeId] = { ...next, position: current.position };
+            return moveWithFootLocks(state.nodes, original, updated, nodeId, next.position);
+          }
+          return updated;
+        }),
       };
     });
   },
   commitInspectorEdit: () => set((state) => {
     const session = state.inspectorSession;
     if (!session) return {};
+    if (session.poseFrames) {
+      const history = poseHistory(session.poseFrames, state.frames);
+      return history ? { inspectorSession: null, transformHistory: [...state.transformHistory, history], redoStack: [] } : { inspectorSession: null };
+    }
     const after = session.frameIds.map((id) => {
       const value = state.frames.find((frame) => frame.id === id)?.nodeStates[session.nodeId];
       return value ? cloneFrameState(value) : null;
@@ -1368,6 +1627,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set((state) => {
       const session = state.transformSession;
       if (!session) return {};
+      if (session.poseFrames) {
+        const history = poseHistory(session.poseFrames, state.frames);
+        return history ? { transformSession: null, transformHistory: [...state.transformHistory, history], redoStack: [] } : { transformSession: null };
+      }
       const after = session.frameIds.map((id) => {
         const value = state.frames.find((frame) => frame.id === id)?.nodeStates[session.nodeId];
         return value ? cloneFrameState(value) : null;
@@ -1479,6 +1742,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       if (!source) return {};
       const id = `node-${crypto.randomUUID()}`;
       const copy: RigNode = { ...source, id, name: `${source.name} Copy`, children: [], assetIds: [...nodeSpriteIds(source)], transform: { ...source.transform, position: { ...source.transform.position }, scale: { ...source.transform.scale } }, pivot: { ...source.pivot } };
+      delete copy.ikBinding;
       const parent = source.parentId ? state.nodes[source.parentId] : null;
       const nodes = {
         ...state.nodes,
@@ -1518,6 +1782,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set((state) => {
       const entry = state.transformHistory[state.transformHistory.length - 1];
       if (!entry) return {};
+      if ('bindingEnd' in entry) return {
+        nodes: withIkBinding(state.nodes, entry.bindingEnd, entry.bindingBefore),
+        transformHistory: state.transformHistory.slice(0, -1), redoStack: [...state.redoStack, entry],
+      };
+      if ('rigBefore' in entry) return {
+        frames: restoreRigPose(state.frames, entry.rigBefore, entry.rigAfter),
+        transformHistory: state.transformHistory.slice(0, -1), redoStack: [...state.redoStack, entry],
+        isPlaying: false, playbackGroupId: null, transformSession: null, inspectorSession: null,
+      };
       if ('timelineBefore' in entry) {
         return {
           ...restoreTimeline(entry.timelineBefore),
@@ -1601,6 +1874,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set((state) => {
       const entry = state.redoStack[state.redoStack.length - 1];
       if (!entry) return {};
+      if ('bindingEnd' in entry) return {
+        nodes: withIkBinding(state.nodes, entry.bindingEnd, entry.bindingAfter),
+        transformHistory: [...state.transformHistory, entry], redoStack: state.redoStack.slice(0, -1),
+      };
+      if ('rigAfter' in entry) return {
+        frames: restoreRigPose(state.frames, entry.rigAfter, entry.rigBefore),
+        transformHistory: [...state.transformHistory, entry], redoStack: state.redoStack.slice(0, -1),
+        isPlaying: false, playbackGroupId: null, transformSession: null, inspectorSession: null,
+      };
       if ('timelineBefore' in entry) {
         return {
           ...restoreTimeline(entry.timelineAfter),

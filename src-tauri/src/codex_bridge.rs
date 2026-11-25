@@ -190,6 +190,7 @@ fn run_request(
     request_id: &str,
     prompt: &str,
     model: &str,
+    images: &[Vec<u8>],
     cancelled: &AtomicBool,
 ) -> Result<String, String> {
     let nonce = SystemTime::now()
@@ -243,7 +244,12 @@ fn run_request(
     if !model.trim().is_empty() {
         cmd.arg("--model").arg(model.trim());
     }
-    cmd.arg("-")
+    for (index, bytes) in images.iter().enumerate() {
+        let image = temp.0.join(format!("frame-{index}.png"));
+        std::fs::write(&image, bytes).map_err(|e| format!("无法写入参考图：{e}"))?;
+        cmd.arg("--image").arg(&image);
+    }
+    cmd.arg("--").arg("-")
         .current_dir(&temp.0)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -359,9 +365,14 @@ pub async fn codex_chat(
     executable: String,
     prompt: String,
     model: String,
+    images: Option<Vec<Vec<u8>>>,
 ) -> Result<String, String> {
     if request_id.len() > 100 || prompt.len() > 2_000_000 || model.len() > 100 {
         return Err("请求数据过大。".into());
+    }
+    let images = images.unwrap_or_default();
+    if images.len() > 6 || images.iter().any(|bytes| bytes.len() > 512_000 || !bytes.starts_with(b"\x89PNG\r\n\x1a\n")) {
+        return Err("参考图必须是 PNG，每次最多 6 张，每张不超过 512 KB。".into());
     }
     let cancelled = Arc::new(AtomicBool::new(false));
     {
@@ -374,7 +385,7 @@ pub async fn codex_chat(
     let id = request_id.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let path = resolve_codex(&executable)?;
-        run_request(&app, &path, &id, &prompt, &model, &cancelled)
+        run_request(&app, &path, &id, &prompt, &model, &images, &cancelled)
     })
     .await
     .map_err(|e| e.to_string())

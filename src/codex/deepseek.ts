@@ -91,11 +91,12 @@ export interface ChatDeepSeekOptions {
   settings: DeepSeekSettings;
   system: string;
   user: string;
+  images?: string[];
   signal?: AbortSignal;
   onProgress?: (message: string) => void;
 }
 
-export async function chatDeepSeek({ settings, system, user, signal, onProgress }: ChatDeepSeekOptions): Promise<string> {
+export async function chatDeepSeek({ settings, system, user, images = [], signal, onProgress }: ChatDeepSeekOptions): Promise<string> {
   const apiKey = settings.apiKey.trim();
   if (!apiKey) throw new Error('请先填写 DeepSeek API Key。');
   const base = (settings.baseUrl.trim() || defaultBaseUrl()).replace(/\/+$/, '');
@@ -108,7 +109,13 @@ export async function chatDeepSeek({ settings, system, user, signal, onProgress 
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey },
       body: JSON.stringify({
         model: settings.model.trim() || 'deepseek-chat',
-        messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: images.length ? [
+            { type: 'text', text: user },
+            ...images.map((url) => ({ type: 'image_url', image_url: { url } })),
+          ] : user },
+        ],
         response_format: { type: 'json_object' },
         temperature: 0.2,
         max_tokens: 8192,

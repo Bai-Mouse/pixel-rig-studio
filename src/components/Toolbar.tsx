@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react';
 import { useProjectStore } from '../state/projectStore';
 import type { RotationSnapAngle, TransformTool } from '../types/project';
 import type { RecentProject } from '../project/recentProjects';
+import { transformShortcuts } from '../canvas/transformControls';
 
 interface ToolbarProps {
   onNewProject: () => void;
@@ -46,11 +47,12 @@ export function Toolbar({ onNewProject, onOpenProject, onSaveProject, onCopyProj
   const flipNode = useProjectStore((state) => state.flipNode);
   const resetNodeTransform = useProjectStore((state) => state.resetNodeTransform);
   const transformTools: { tool: TransformTool; label: string; icon: 'cursor' | 'move' | 'rotate' | 'scale' | 'target' }[] = [
-    { tool: 'select', label: 'Select (V)', icon: 'cursor' },
-    { tool: 'move', label: 'Move (W)', icon: 'move' },
-    { tool: 'rotate', label: 'Rotate (R)', icon: 'rotate' },
-    { tool: 'scale', label: 'Scale (S)', icon: 'scale' },
-    { tool: 'pivot', label: 'Set pivot (P)', icon: 'target' },
+    { tool: 'select', label: 'Select', icon: 'cursor' },
+    { tool: 'move', label: 'Move', icon: 'move' },
+    { tool: 'rotate', label: 'Rotate', icon: 'rotate' },
+    { tool: 'scale', label: 'Scale', icon: 'scale' },
+    { tool: 'pivot', label: 'Set pivot', icon: 'target' },
+    { tool: 'ik', label: 'Two-bone IK', icon: 'target' },
   ];
 
   return (
@@ -78,8 +80,8 @@ export function Toolbar({ onNewProject, onOpenProject, onSaveProject, onCopyProj
       <span className="toolbar-group-label">Tools</span>
       <div className="transform-tools" aria-label="Transform tools">
         {transformTools.map(({ tool, label, icon }) => (
-          <button key={tool} type="button" className={`compact-tool ${activeTool === tool ? 'active' : ''}`} title={label} aria-pressed={activeTool === tool} onClick={() => setActiveTool(tool)}>
-            <Icon name={icon} />
+          <button key={tool} type="button" className={`compact-tool ${activeTool === tool ? 'active' : ''}`} title={`${label} (${transformShortcuts[tool]})`} aria-label={label} aria-keyshortcuts={transformShortcuts[tool]} aria-pressed={activeTool === tool} onClick={() => setActiveTool(tool)}>
+            {tool === 'ik' ? 'IK' : <Icon name={icon} />}
           </button>
         ))}
       </div>

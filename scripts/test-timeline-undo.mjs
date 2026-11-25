@@ -39,6 +39,31 @@ try {
   const bodyX = () => state().frames.map((frame) => frame.nodeStates.body.position.x);
   const historySize = () => state().transformHistory.length;
 
+  // Selection preview loops even if normal playback loop is disabled.
+  seedFrames([1, 3], 3);
+  state().toggleLooping();
+  state().toggleSelectionPlayback();
+  assert.equal(state().currentFrameIndex, 1);
+  state().advanceFrame();
+  assert.equal(state().currentFrameIndex, 3);
+  state().advanceFrame();
+  assert.equal(state().currentFrameIndex, 1);
+  state().toggleSelectionPlayback();
+  assert.equal(state().isPlaying, false);
+  assert.deepEqual(state().selectedFrameIds, ['frame-1', 'frame-3']);
+  assert.equal(historySize(), 0);
+  seedFrames([0], 0);
+  state().groupFrames([0, 2], 'Preview group', '#aabbcc');
+  state().selectFrame(2);
+  state().toggleSelectionPlayback();
+  assert.equal(state().currentFrameIndex, 0);
+  state().advanceFrame();
+  assert.equal(state().currentFrameIndex, 2);
+  state().advanceFrame();
+  assert.equal(state().currentFrameIndex, 0);
+  state().selectFrame(1);
+  assert.equal(state().isPlaying, false);
+
   const animation = (count, fps = 24, loop = false) => ({
     format: 'pixel-rig-animation',
     version: 3,
@@ -77,6 +102,24 @@ try {
   assert.equal(state().frames.length, 5);
   assert.equal(state().currentFrameIndex, 2);
 
+  // Non-adjacent frames copy in timeline order, with the drawing and group intact.
+  const beforeBatchCopy = seedFrames([4, 1], 1);
+  state().duplicateFrame();
+  const copies = state().frames.slice(5);
+  assert.deepEqual(bodyX(), [100, 101, 102, 103, 104, 101, 104]);
+  assert.equal(new Set(ids()).size, 7);
+  assert.equal(copies[0].canvasData, beforeBatchCopy[1].canvasData);
+  assert.deepEqual(copies[1].group, beforeBatchCopy[4].group);
+  assert.notEqual(copies[0].nodeStates.body.position, beforeBatchCopy[1].nodeStates.body.position);
+  assert.deepEqual(state().selectedFrameIds, copies.map((frame) => frame.id));
+  assert.equal(state().currentFrameIndex, 5);
+  assert.equal(historySize(), 1);
+  state().undoTransform();
+  assert.deepEqual(state().frames, beforeBatchCopy);
+  assert.deepEqual(state().selectedFrameIds, ['frame-4', 'frame-1']);
+  state().redoTransform();
+  assert.deepEqual(state().frames.slice(5), copies);
+
   // 3. Multi-frame delete restores every removed frame, including its drawing layer.
   seedFrames([1, 2, 3], 2);
   const beforeDelete = state().frames;
@@ -98,6 +141,25 @@ try {
   state().undoTransform();
   assert.deepEqual(state().frames, beforeMove);
   assert.equal(state().currentFrameIndex, 0, 'the playhead returns to where it was');
+
+  seedFrames([0, 2], 2);
+  const beforeBatchMove = state().frames;
+  assert.equal(state().moveFrames(['frame-2', 'frame-0'], 5), true);
+  assert.deepEqual(ids(), ['frame-1', 'frame-3', 'frame-4', 'frame-0', 'frame-2']);
+  assert.equal(state().frames[4], beforeBatchMove[2]);
+  assert.deepEqual(state().selectedFrameIds, ['frame-0', 'frame-2']);
+  assert.equal(state().currentFrameIndex, 4);
+  assert.equal(historySize(), 1);
+  assert.equal(state().moveFrames(state().selectedFrameIds, 5), false);
+  assert.equal(historySize(), 1);
+  state().undoTransform();
+  assert.deepEqual(state().frames, beforeBatchMove);
+  assert.equal(state().currentFrameIndex, 2);
+  state().redoTransform();
+  assert.equal(state().currentFrameIndex, 4);
+  assert.equal(state().moveFrames(state().selectedFrameIds, 0), true);
+  assert.deepEqual(ids(), ['frame-0', 'frame-2', 'frame-1', 'frame-3', 'frame-4']);
+  assert.equal(state().moveFrames(['frame-0', 'stale-frame'], 3), false);
 
   // 5. In-between frames undo as a single step.
   seedFrames([0], 0);

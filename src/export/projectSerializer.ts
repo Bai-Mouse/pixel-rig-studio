@@ -1,5 +1,6 @@
 import type { RenderableProject } from './animationRenderer';
 import { nodeSpriteIds, type AnimationFrame, type NodeFrameState, type ProjectSettings, type RigNode, type RotationSnapAngle } from '../types/project';
+import { normalizedIkBinding, validFootLocks } from '../state/twoBoneIk';
 
 export interface SerializableProject extends RenderableProject {
   fps: number;
@@ -68,18 +69,23 @@ export function parseProjectFile(source: string): SerializableProject {
   }
   if (typeof file.animation.fps !== 'number' || file.animation.fps < 1 || !Number.isFinite(file.animation.fps)) throw new Error('The project FPS is invalid.');
   const nodes = Object.fromEntries(Object.entries(file.nodes).map(([nodeId, rawNode]) => {
-    const node = rawNode as RigNode;
+    const { ikBinding: rawBinding, ...node } = rawNode as RigNode;
+    const ikBinding = normalizedIkBinding(rawBinding);
     const assetIds = Array.isArray(node.assetIds) ? [...new Set(node.assetIds)] : node.assetId ? [node.assetId] : [];
-    return [nodeId, { ...node, assetIds, assetId: assetIds[0] ?? null }];
+    return [nodeId, { ...node, assetIds, assetId: assetIds[0] ?? null, ...(ikBinding ? { ikBinding } : {}) }];
   })) as SerializableProject['nodes'];
-  const frames = file.animation.frames.map((frame) => ({
-    ...frame,
-    nodeStates: Object.fromEntries(Object.entries(frame.nodeStates).map(([nodeId, state]) => [nodeId, {
-      ...state,
-      imageIndex: Number.isFinite(state.imageIndex) ? Math.max(0, Math.round(state.imageIndex)) : 0,
-      sortingOrder: Number.isFinite(state.sortingOrder) ? Math.round(state.sortingOrder) : nodes[nodeId]?.sortingOrder ?? 0,
-    }])),
-  }));
+  const frames = file.animation.frames.map(({ footLocks, ...frame }) => {
+    const locks = validFootLocks(footLocks).filter(([id, lock]) => nodes[id] && nodes[lock.lowerId] && nodes[lock.upperId]);
+    return {
+      ...frame,
+      ...(locks.length ? { footLocks: Object.fromEntries(locks) } : {}),
+      nodeStates: Object.fromEntries(Object.entries(frame.nodeStates).map(([nodeId, state]) => [nodeId, {
+        ...state,
+        imageIndex: Number.isFinite(state.imageIndex) ? Math.max(0, Math.round(state.imageIndex)) : 0,
+        sortingOrder: Number.isFinite(state.sortingOrder) ? Math.round(state.sortingOrder) : nodes[nodeId]?.sortingOrder ?? 0,
+      }])),
+    };
+  });
   return {
     settings: normalizeProjectSettings(file.settings),
     assets: file.assets,
@@ -120,7 +126,9 @@ export function animationDataFile(project: SerializableProject): AnimationDataFi
       assetIds: nodeSpriteIds(node),
       pivot: node.pivot,
     }])),
-    frames: project.frames,
+    // An animation can be imported into a different rig, at a different root position.
+    // Export the solved pose, not constraints tied to the source project's world space.
+    frames: project.frames.map(({ footLocks: _footLocks, ...frame }) => frame),
   };
 }
 

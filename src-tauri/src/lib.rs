@@ -1,4 +1,5 @@
 use std::path::Path;
+mod claude_bridge;
 mod codex_bridge;
 
 fn write_bytes(path: &Path, data: Vec<u8>) -> Result<(), String> {
@@ -43,13 +44,17 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(codex_bridge::CodexBridge::default())
+        .manage(claude_bridge::ClaudeBridge::default())
         .invoke_handler(tauri::generate_handler![
             write_export_file,
             write_export_file_in_directory,
             read_project_file,
             codex_bridge::codex_connection_status,
             codex_bridge::codex_chat,
-            codex_bridge::codex_cancel
+            codex_bridge::codex_cancel,
+            claude_bridge::claude_connection_status,
+            claude_bridge::claude_chat,
+            claude_bridge::claude_cancel
         ])
         .run(tauri::generate_context!())
         .expect("error while running Pixel Rig Studio");
