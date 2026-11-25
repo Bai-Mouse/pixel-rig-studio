@@ -196,3 +196,12 @@ button { color: inherit; font: inherit; }
 .ik-bindings select, .ik-binding-editor input { width: 100%; min-width: 0; color: #e5e8f6; background: #242936; border: 1px solid #414861; border-radius: 4px; padding: 4px 5px; font: inherit; }
 .ik-binding-editor { margin-top: 6px; }
 .ik-binding-editor > .ik-panel-actions { margin-top: 5px; }
+.project-exit-dialog { width: min(490px, calc(100% - 32px)); box-sizing: border-box; padding: 20px; color: #e5e9f9; background: #20242f; border: 1px solid #48516d; border-radius: 9px; box-shadow: 0 24px 80px #0008; }
+.project-exit-dialog::backdrop { background: #080a13b8; }
+.project-exit-dialog h2 { margin: 0 0 10px; font-size: 17px; }
+.project-exit-dialog p { margin: 0 0 16px; color: #b8bfd4; overflow-wrap: anywhere; }
+.project-exit-dialog .project-exit-error { color: #ffad95; }
+.project-exit-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.project-exit-actions button { padding: 7px 11px; border: 1px solid #4e5973; border-radius: 5px; background: #2d3445; color: #e5e9f9; cursor: pointer; }
+.project-exit-actions button:disabled { opacity: .55; cursor: wait; }
+.project-exit-actions .project-exit-save { background: #4856a0; border-color: #7484d1; }
